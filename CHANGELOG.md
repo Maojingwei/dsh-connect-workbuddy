@@ -1,5 +1,59 @@
 # Changelog
 
+## 未发布
+
+> 两处修复：**① 装完重启插件消失**（#151）——把宿主提供的 `@earendil-works/pi-ai` 标成 optional
+> peer，使安装期不再因「闭包里解析不到它」而拒绝整个 generation；**② DSML 工具名一字之差**
+> （#152）——`pwdsh` → `pwsh` 这类与本次声明工具只差一个字符的名字，现在按那个工具恢复，
+> 不再整段回退成正文。两处都保持 fail-closed 的默认：候选集只来自请求自己的 `body.tools`，
+> 不凭空造名。
+
+### Fixes
+
+- **安装成功但重启后插件消失：generation peer validation 拒绝了安装（#151）**
+  - **现象**：插件市场安装显示 `generation-install: promoted to …`，接着
+    `generation peer validation failed: @earendil-works/pi-ai does not resolve from the generation or
+    installation closure`，`exit=1`；重启后该 generation 被扫掉（`swept N unreferenced plugin generation(s)`），
+    用户得重装。
+  - **根因不是"插件依赖没装"，而是"它不可能被装上"**：pi-ai 由**宿主**提供 —— `dsh-llm-pi-ai` 把它列为自己的
+    `dependencies`（`^1.1.0`），宿主用运行期拦截层应答这个裸包名；而 profile 是按 `autoInstallPeers: false` 建的，
+    peer 从不进入 profile 的 `node_modules`。所以一份「必需 peer」在安装闭包里**永远解析不到**，校验必然失败。
+  - **修法**：`package.json` 增加 `peerDependenciesMeta`，把 `@earendil-works/pi-ai` 标为 `optional: true`。
+    **范围一个字符都没动**（仍是 `>=0.85.0 <0.88.0 || >=1.0.0-0 <2.0.0`）——`optional` 说的是「不要
+    求我自己带一份」，不是「我不支持这些版本」；运行期版本探测（`pi-ai-runtime.ts`）与语义边界仍以该范围为准。
+  - 为什么不是干脆删掉这条 peer：插件**静态 import** 了 pi-ai（`adapter.ts:19–21`），它不是可选依赖，
+    声明必须留着；只有"安装期强制"这一层需要让开。
+  - 报告里那句「`@deepseek-ai/cordis` 已有同样处理，照此办理即可」**不成立** —— 本仓库此前
+    `peerDependenciesMeta` 是空的，cordis 也从未标 optional。修法本身没问题，但依据是上面那条，不是先例。
+
+- **DSML 泄漏时工具名一字之差，整段标记回退成正文（#152）**
+  - **现象**：模型把工具调用写进正文时把名字写成 `pwdsh`，而请求声明的是 `pwsh`。第二道闸按名字拒绝
+    （这是对的：那个名字从未被提供过），于是整块按原文显示 —— 用户看到一堵乱码墙。
+  - **新证据**：幻觉名与真实名之间存在**可预测的一字变形**（`pwdsh` = `pwsh` 中间多插一个 `d`，
+    编辑距离 1）。这跟此前记录过的 `validate` 那种「名字整段被换掉」不同，是可以低成本兜底的。
+  - **修法**：第二道闸在拒绝之前先试一次受限纠正（`repairNearMissName`，由 shim 开启）：
+    - 候选集**只来自本次请求的 `body.tools`** —— 永远不会选中一个没被提供的名字，更不会凭空造名；
+    - 写出名与候选名的**编辑距离必须 ≤ 1**，且**恰好一个**候选落在这个距离内（两个就放弃）；
+    - 双方长度都 **≥ 4**（`cat`/`cut`、`bash`/`dash` 这类三字母的一字之差不是证据）；
+    - 写出名若**已精确命中**声明名，直接用它，绝不"纠正"到邻居；
+    - **只纠正 `invoke name=`**；`parameter name=` 一律不动（改参数名等于改调用语义，比显示正文更糟）；
+    - `tool_choice` 的钉选、第四道闸（必需参数缺失即截断）**都在纠正后的名字上照旧生效**。
+  - 默认仍是 fail-closed：`repairNearMissName` 不传就是关闭，只有 shim 的请求路径打开它。
+
+### Tests
+
+- `tests/dsml-recovery.spec.ts` 新增 10 条（#152）：真实捕获形态 `pwdsh` → `pwsh` 被恢复；不开关时仍拒绝；
+  两个候选在距离内则放弃；短名（写出名 3 字 / 候选 3 字）两种方向都拒绝；已精确命中的名字不被"纠正"；
+  不在声明集里的近邻不被凭空选中；钉选与必需参数两道闸在纠正后仍生效；**参数名不被纠正**。
+- `tests/shim-recovery.spec.ts` 新增 1 条（#152 的**接线**）：走真实 shim 与真实响应流，断言 `pwdsh`
+  在声明 `pwsh` 时被恢复成 `pwsh`、在只声明 `bash` 时**仍回退成正文**。这条单独存在的理由与 #149 相同：
+  纯函数用例自己传开关，摘掉 `shim.ts` 里的 `repairNearMissName: true` 时它们全绿 —— 实测该变异只让这条变红。
+- `tests/dsh-line.spec.ts` 新增 1 条（#151）：断言 `peerDependenciesMeta['@earendil-works/pi-ai'].optional === true`，
+  且 peer **范围**未因此改动。
+- 变异验证（每条都确认过会让对应用例变红）：去掉编辑距离判断 → 1 条红；去掉唯一性判断 → 1 条红；
+  去掉两个长度下限 → 2 条红；忽略 opt-in（默认开启）→ 1 条红；摘掉 shim 的接线 → 1 条红；移除 `optional` → 1 条红。
+- 全量：`tsc` 双配置 0 错误，**143 文件 / 2491 通过（2 条按平台跳过）**，`tsdown` 构建通过。
+
 ## 5.12.1 (2026-10-26)
 
 > 修正 5.12.0 的 `dropForeignThinking` 漏判的一条腿：`isSameModel` 判据是 provider **且** api

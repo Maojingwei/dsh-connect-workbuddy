@@ -291,6 +291,30 @@ describe('declared DSH host line', () => {
     }
   })
 
+  it('marks the host-supplied pi-ai peer optional, so an install is not rejected for it', () => {
+    // ISSUE #151. `@earendil-works/pi-ai` is a REQUIRED peer in range terms —
+    // the plugin imports it statically, so it must be present at run time — but
+    // it is never installed into a profile: the host carries it as its own
+    // dependency (`dsh-llm-pi-ai`'s `dependencies`, `^1.1.0`) and answers the
+    // bare specifier through its runtime interception layer, while profiles are
+    // created with `autoInstallPeers: false`.
+    //
+    // A required peer in that situation is unsatisfiable at INSTALL time, and a
+    // host that validates the install closure rejects the generation: the user
+    // sees a successful install, then the plugin is swept on restart (#151).
+    // `optional` states the truth — "supplied by the host, do not require me to
+    // ship it" — without weakening the RANGE, which stays the supported
+    // boundary the runtime probe reads.
+    const meta = (manifest() as { peerDependenciesMeta?: Record<string, { optional?: boolean }> })
+      .peerDependenciesMeta ?? {}
+    expect(meta['@earendil-works/pi-ai']?.optional, 'pi-ai must be optional').toBe(true)
+
+    // The range itself must NOT move: marking it optional is about install
+    // validation, not about what this plugin supports at run time.
+    const peers = manifest().peerDependencies ?? {}
+    expect(peers['@earendil-works/pi-ai']).toBe('>=0.85.0 <0.88.0 || >=1.0.0-0 <2.0.0')
+  })
+
   it('does not keep a devDependency on a package that stopped publishing', () => {
     // `dsh-client-runtime` 停在 0.1.1-rc.2、不在任何受支持主机的捆绑集内，且源码零引用。
     // 它此前作为「旧主机行的类型来源」被保留，但那条线已随 2.1.0 移除——保留只会让

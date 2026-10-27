@@ -248,6 +248,36 @@ export interface RecoveryGate {
    */
   inferFromSchema?: boolean
   /**
+   * Opt in to repairing a DECLARED name that differs from one declared tool by
+   * a single-character edit (issue #152).
+   *
+   * Captured on 2026-10-27: the model wrote `name="pwdsh"` where the request
+   * had offered `pwsh` — one inserted `d` between `pw` and `sh`. Gate 2 refused
+   * it (correctly: the name was never on offer), so the whole block fell back
+   * to plain text and the user read a wall of markup.
+   *
+   * WHY THIS IS NOT "GUESSING A NAME". The candidate set is the request's OWN
+   * `body.tools`; a repair can only ever select a name that was already on
+   * offer, and only when exactly one declared name is within one edit of the
+   * written one. It never invents anything, and the pin in gate 2 still runs
+   * on the repaired name — so a request pinned to another tool still refuses.
+   *
+   * The guards that make "one edit" safe rather than reckless:
+   *
+   *   - both names must be at least {@link NEAR_NAME_MIN_LENGTH} long, because
+   *     short names collide trivially (`bash`/`dash` are 1 apart);
+   *   - the written name must have NO exact match — an exact match always
+   *     wins and is never "repaired" into a neighbour;
+   *   - exactly one candidate may be within one edit, or nothing is returned;
+   *   - only a DECLARED name is repaired. A block with no name at all keeps
+   *     going to {@link inferFromSchema} (or stays refused), and parameter
+   *     names are never touched — rewriting those would change what the call
+   *     MEANS, which is a far worse failure than showing markup.
+   *
+   * Off unless the caller turns it on, so the default stays fail-closed.
+   */
+  repairNearMissName?: boolean
+  /**
    * Called once per withheld block, when the stream declined to recover AND
    * declined to show what it found.
    *
@@ -257,6 +287,66 @@ export interface RecoveryGate {
    * a chat request.
    */
   onWithheld?: (reason: 'unnamed-invoke' | 'stray-markup') => void
+}
+
+/**
+ * Shortest tool name a near-miss repair may act on (issue #152).
+ *
+ * Below this, "one edit apart" stops being evidence: `dash` and `bash` are one
+ * edit apart, and so are any two four-letter names sharing a prefix. At 4 the
+ * reported `pwsh` → `pwdsh` still qualifies (both are 4+), which is the shape
+ * this exists for.
+ */
+const NEAR_NAME_MIN_LENGTH = 4
+
+/**
+ * Whether `a` and `b` are at most one edit apart (insertion, deletion, or
+ * substitution).
+ *
+ * Only ever asked for a ceiling of 1, where the general Levenshtein matrix is
+ * unnecessary: the lengths must differ by at most one, and after skipping the
+ * first position where they differ, the remaining tails must still agree.
+ *
+ * The equal-length case is a SUBSTITUTION, not an insertion, so it is checked
+ * separately — skipping the differing character on one side only would leave
+ * tails of different length and silently miss every one-character typo of the
+ * same length (`pwdsh`/`pwdss`, `bash`/`dash`), which is the whole point here.
+ */
+function withinOneEdit(a: string, b: string): boolean {
+  if (a === b) return true
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a]
+  if (long.length - short.length > 1) return false
+  let i = 0
+  while (i < short.length && short[i] === long[i]) i++
+  if (short.length === long.length) {
+    // Substitution: the single differing position is skipped on BOTH sides.
+    return short.slice(i + 1) === long.slice(i + 1)
+  }
+  // Insertion/deletion: skip the extra character in the longer string only.
+  return long.slice(i + 1) === short.slice(i)
+}
+
+/**
+ * The one declared tool within a single edit of `written`, or `undefined`.
+ *
+ * Refuses when the name is already declared (nothing to repair), when either
+ * side is shorter than {@link NEAR_NAME_MIN_LENGTH}, and when more than one
+ * declared tool is in reach — ambiguity is exactly what gate 2 exists to stop.
+ */
+function nearMissNameFor(
+  written: string,
+  declaredNames: ReadonlySet<string>,
+): string | undefined {
+  if (declaredNames.has(written)) return undefined
+  if (written.length < NEAR_NAME_MIN_LENGTH) return undefined
+  let fit: string | undefined
+  for (const candidate of declaredNames) {
+    if (candidate.length < NEAR_NAME_MIN_LENGTH) continue
+    if (!withinOneEdit(written, candidate)) continue
+    if (fit !== undefined) return undefined
+    fit = candidate
+  }
+  return fit
 }
 
 /** What one {@link DsmlStreamBuffer.add} call produced. */
@@ -793,8 +883,19 @@ function parseInvoke(
   let name: string | undefined
   if (declared !== undefined && declared !== '') {
     // Gate 2: a name the request never offered is not a call we may invent.
-    if (!gate.declaredNames.has(declared)) return undefined
-    name = declared
+    if (!gate.declaredNames.has(declared)) {
+      // Issue #152: a name one character away from exactly one declared tool
+      // (`pwdsh` for `pwsh`) is treated as that tool, but ONLY when the caller
+      // opted in. The repair still cannot leave `declaredNames`, and the pin
+      // below still runs on the repaired name.
+      const repaired = gate.repairNearMissName === true
+        ? nearMissNameFor(declared, gate.declaredNames)
+        : undefined
+      if (repaired === undefined) return undefined
+      name = repaired
+    } else {
+      name = declared
+    }
   } else if (open.attributes.trim() === '') {
     // No attributes at all — the shape the upstream produced in
     // session-333b5f2d. If the caller turned on `inferFromSchema`, the name is

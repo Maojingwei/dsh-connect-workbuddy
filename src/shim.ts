@@ -2209,6 +2209,10 @@ export function createWorkBuddyShim(options: WorkBuddyShimOptions): WorkBuddyShi
       // The name-less invoke (session-333b5f2d) is recovered from the model's
       // own parameter tags against these schemas — see `inferFromSchema`.
       inferFromSchema: true,
+      // Issue #152: a DECLARED name one edit away from exactly one offered tool
+      // (`pwdsh` for `pwsh`) is read as that tool instead of falling back to
+      // plain text. Same rule as above — only ever a name already on offer.
+      repairNearMissName: true,
       ...declared.pinnedToolName === undefined ? {} : { pinnedToolName: declared.pinnedToolName },
     }
 

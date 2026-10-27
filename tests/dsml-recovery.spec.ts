@@ -360,3 +360,99 @@ describe('a name-less invocation', () => {
     expect(result.text).toContain(`${MARK}invoke>`)
   })
 })
+
+/**
+ * Issue #152: the model writes a tool name ONE CHARACTER away from a name the
+ * request offered.
+ *
+ * The captured form is `name="pwdsh"` where the request offered `pwsh` — one
+ * inserted `d` between `pw` and `sh`. Gate 2 refuses it (correctly: that name
+ * was never on offer), so before this the whole block fell back to plain text
+ * and the user read a wall of markup.
+ *
+ * The repair is deliberately narrow, and each of these cases pins one edge of
+ * "narrow": it may only ever select a name ALREADY on offer, only when exactly
+ * one is in reach, never for a short name, never when the exact name exists,
+ * and never a parameter name.
+ */
+describe('issue #152: a tool name one edit away from a declared one', () => {
+  /** The exact opener the reporter captured: `pwdsh`, and `pwsh` on offer. */
+  const captured = (): string => invoke('pwdsh', { command: 'ssh host' })
+
+  it('recovers `pwdsh` as `pwsh` when the caller opted in', () => {
+    const g = gate({ declaredNames: new Set(['pwsh', 'read_file']), repairNearMissName: true })
+    const calls = parseToolCalls(captured(), g)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.name).toBe('pwsh')
+    expect(JSON.parse(calls[0]?.arguments ?? '{}')).toEqual({ command: 'ssh host' })
+  })
+
+  it('still refuses it when the caller did NOT opt in — the default stays fail-closed', () => {
+    const g = gate({ declaredNames: new Set(['pwsh', 'read_file']) })
+    expect(parseToolCalls(captured(), g)).toHaveLength(0)
+  })
+
+  it('refuses when TWO declared tools are within one edit — ambiguity is not a repair', () => {
+    // `pwdsh` is one insertion from both `pwsh` and `pwdsh`-minus-d variants;
+    // make two genuinely reachable candidates instead: `pwsh` and `pwdss`.
+    const g = gate({ declaredNames: new Set(['pwsh', 'pwdss']), repairNearMissName: true })
+    expect(parseToolCalls(captured(), g)).toHaveLength(0)
+  })
+
+  it('refuses a short name, where one edit is not evidence', () => {
+    // `cut` and `cat` are one substitution apart, but at three characters that
+    // is not evidence — half the three-letter names in any toolbox are one edit
+    // from another. The floor is length >= 4 on both sides, so this must refuse.
+    const g = gate({ declaredNames: new Set(['cat']), repairNearMissName: true })
+    expect(parseToolCalls(invoke('cut', { command: 'x' }), g)).toHaveLength(0)
+  })
+
+  it('refuses a short CANDIDATE even when the written name is long enough', () => {
+    // The floor applies to both sides: a 4+ written name against a 3-letter
+    // offered tool is still a guess, not a repair.
+    const g = gate({ declaredNames: new Set(['cat']), repairNearMissName: true })
+    expect(parseToolCalls(invoke('cats', { command: 'x' }), g)).toHaveLength(0)
+  })
+
+  it('never "repairs" a name that is already declared', () => {
+    const g = gate({ declaredNames: new Set(['pwsh']), repairNearMissName: true })
+    const calls = parseToolCalls(invoke('pwsh', { command: 'ls' }), g)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.name).toBe('pwsh')
+  })
+
+  it('never invents a name that is not on offer, however close', () => {
+    // `pwdsh` is close to `pwsh`, but if `pwsh` was not offered there is
+    // nothing legitimate to select.
+    const g = gate({ declaredNames: new Set(['bash', 'read_file']), repairNearMissName: true })
+    expect(parseToolCalls(captured(), g)).toHaveLength(0)
+  })
+
+  it('still honours the pin: a pinned request refuses the repaired name', () => {
+    const g = gate({
+      declaredNames: new Set(['pwsh', 'read_file']),
+      repairNearMissName: true,
+      pinnedToolName: 'read_file',
+    })
+    expect(parseToolCalls(captured(), g)).toHaveLength(0)
+  })
+
+  it('still honours gate 4: a repaired name missing a required parameter is truncated', () => {
+    const g = gate({
+      declaredNames: new Set(['pwsh']),
+      repairNearMissName: true,
+      requiredParameters: new Map([['pwsh', ['command', 'description']]]),
+    })
+    expect(parseToolCalls(captured(), g)).toHaveLength(0)
+  })
+
+  it('never repairs a PARAMETER name — that would change what the call means', () => {
+    // `comand` is one edit from `command`; the parameter must keep its written
+    // spelling and the call must still be recovered (as `pwsh`) with the
+    // parameter exactly as the model wrote it.
+    const g = gate({ declaredNames: new Set(['pwsh']), repairNearMissName: true })
+    const calls = parseToolCalls(invoke('pwdsh', { comand: 'ls' }), g)
+    expect(calls).toHaveLength(1)
+    expect(JSON.parse(calls[0]?.arguments ?? '{}')).toEqual({ comand: 'ls' })
+  })
+})

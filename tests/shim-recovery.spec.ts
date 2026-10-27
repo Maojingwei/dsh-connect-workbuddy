@@ -198,6 +198,44 @@ describe('shim DSML recovery', () => {
     expect(visibleText(body)).not.toContain(MARK)
   })
 
+  it('recovers a name one edit away from a declared one (issue #152)', async () => {
+    // THE WIRING, not the predicate: `repairNearMissName` is proven as a unit in
+    // dsml-recovery.spec.ts, but that proves nothing about production unless
+    // `shim.ts` actually passes it. Mutation: dropping `repairNearMissName: true`
+    // from the gate leaves the unit suite green and this case red.
+    shim = makeShim(() => ({ ok: true, response: streamOf([
+      contentFrame(leakedCall('pwdsh')),
+      contentFrame('', 'stop'),
+      'data: [DONE]\n\n',
+    ]) }))
+    await shim.ready
+
+    const body = await post(shim, bodyWithTools())
+    // The declared name is `bash` here, so `pwdsh` is NOT within one edit of it
+    // and must stay prose — that is the fail-closed half of the same wiring.
+    expect(callsIn(body)).toEqual([])
+
+    // Now offer the name it is one edit from. The call must be recovered as the
+    // DECLARED spelling (`pwsh`), never as the written one.
+    shim = makeShim(() => ({ ok: true, response: streamOf([
+      contentFrame(leakedCall('pwdsh')),
+      contentFrame('', 'stop'),
+      'data: [DONE]\n\n',
+    ]) }))
+    await shim.ready
+    const declared = JSON.stringify({
+      model: 'glm-5.3',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [{
+        type: 'function',
+        function: { name: 'pwsh', parameters: { type: 'object', required: ['command'] } },
+      }],
+    })
+    const recovered = await post(shim, declared)
+    expect(callsIn(recovered)).toEqual([{ name: 'pwsh', arguments: '{"command":"ls"}' }])
+    expect(visibleText(recovered)).not.toContain(MARKUP_TOKEN)
+  })
+
   it('leaves an ordinary answer byte-for-byte unchanged', async () => {
     const chunks = [contentFrame('第一句。'), contentFrame('第二句。', 'stop'), 'data: [DONE]\n\n']
     shim = makeShim(() => ({ ok: true, response: streamOf(chunks) }))
