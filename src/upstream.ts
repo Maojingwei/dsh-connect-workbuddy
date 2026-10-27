@@ -715,12 +715,12 @@ function asBusinessCode(value: unknown): number | undefined {
  * runs the OTHER way (the substring happens to hit the nested `"code":11128`
  * while the parser only knew `error.data.code`), which is why this could not be
  * fixed by "just use the parser" — both readers must consult ONE fact.
- * That is not cosmetic — `client` is the one kind that does NOT
- * enter the channel rescue ladder (`src/shim.ts`, gated on
- * `kind === 'channel_reject'`), so `forceNeutralHead` and both perturbation
- * rungs never fired, and the user was told to "adjust the request" for a
- * refusal the plugin had not actually tried to rescue. Issue #113's whole fix
- * silently switches off depending on a space.
+ * That is not cosmetic — the channel rescue ladder runs ONLY for
+ * `channel_reject` (`src/shim.ts` gates on `result.kind === 'channel_reject'`),
+ * so any other kind skips it entirely: `forceNeutralHead` and both perturbation
+ * rungs never fire, and the user is told to "adjust the request" for a refusal
+ * the plugin never tried to rescue. Issue #113's whole fix depends on whether
+ * the upstream happened to emit a space.
  *
  * THREE READS, IN THIS ORDER, and the ordering is the safety property:
  *
@@ -1132,10 +1132,12 @@ export function isChannelGateFamilyBody(body: string): boolean {
  * ADVISES, and that is {@link channelGateMemberOf}'s job, decided by the
  * plugin's own evidence rather than by a wording the upstream may misreport.
  *
- * The code is matched in its quoted-key form (`"code":11128`): a request id is
- * hexadecimal and can contain the digits `11128` by coincidence, and a bare
- * substring search over an arbitrary failure body is how a red herring gets
- * promoted into a diagnosis.
+ * The code is read by {@link statesBusinessCode}, exactly as the family test
+ * above it does — this function adds nothing to that decision and must not
+ * appear to own a rule of its own. The reason the code is READ rather than
+ * text-matched is unchanged (issue #155): a request id is hexadecimal and can
+ * contain the digits `11128` by coincidence, and a bare substring search over an
+ * arbitrary failure body is how a red herring gets promoted into a diagnosis.
  */
 export function isChannelRejectBody(body: string): boolean {
   return isChannelGateFamilyBody(body)

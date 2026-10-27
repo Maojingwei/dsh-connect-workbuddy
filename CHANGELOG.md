@@ -31,10 +31,10 @@
     整个消失**，`channel_reject` 贴出来却没有 `11128` 可锚。第 4 行方向相反（substring 恰好命中嵌套的
     `"code":11128`，解析器当时只认 `error.data.code`），说明这不是「换成解析器就完了」—— 两侧都得读同一个
     事实，才可能一致。
-  - **代价不只是文案**：`client` 是**唯一不进渠道救援阶梯**的类别（`src/shim.ts` 的门是
-    `result.kind === 'channel_reject'`），于是 `forceNeutralHead` 与两级扰动重试一次都不会跑 —— 用户被
-    要求「调整请求后重试」，而插件根本没试过救援。`14003` 同族实测降级目标**随 HTTP 状态而变**：
-    `429 {"code": 14003}` → `soft_rate`、`400` → `client`，而 `model_busy` 是三个**不换号**的类别之一
+  - **代价不只是文案**：渠道救援阶梯**只认 `channel_reject`**（`src/shim.ts` 的门是
+    `result.kind === 'channel_reject'`），所以漏判成任何别的类别都等于整条阶梯不跑 —— `forceNeutralHead` 与两级
+    扰动一次都不会触发，用户被要求「调整请求后重试」，而插件根本没试过救援。`14003` 同族实测降级目标**随 HTTP
+    状态而变**：`429 {"code": 14003}` → `soft_rate`、`400` → `client`，而 `model_busy` 是三个**不换号**的类别之一
     （`isFailoverWorthy`）—— 落到 `soft_rate` 就是让整个账号池挨个烧一次真实请求去学一个模型级的事实。
     `14018` spaced 单独看会掉成 `client`，实测只有当 `msg` 里带上了 `Credits exhausted` 那句话时才被
     措辞标记救回 `hard_credit` —— 措辞一改就失效，正是本仓库反复记录的那类脆弱判据。
