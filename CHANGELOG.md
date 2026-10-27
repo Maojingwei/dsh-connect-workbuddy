@@ -1,5 +1,104 @@
 # Changelog
 
+## 未发布
+
+> issue #155 的**两个独立 Bug**：**① 业务码按字节匹配 JSON**——`11128`/`14003`/`14018` 用
+> `body.includes('"code":11128')` 判定，于是同一个信封 `{"code":11128}` 认得、多一个空格的
+> `{"code": 11128}` 和写成字符串的 `{"code":"11128"}` 都不认，渠道闸被静默判成 `client`，
+> **整条救援阶梯不再运行**（#113 的修复等于被一个空格关掉）；**② 删账号只清内存、不清持久化选择**——
+> 磁盘上 `accounts.cn` 仍写着死 id，下次 `applySelection` 把它读回来，CN 整块变「已保存的账号在本机
+> 已不存在」且账号列表一条不渲染。
+
+### Fixes
+
+- **渠道闸/限流/耗尽三族业务码按字节匹配，一个空格就漏判（#155）**
+  - **现象**：报告者贴回来的那条消息里**自相矛盾**——正文写着 `code 11128`，同一句却带
+    `"type":"client"`，收尾是「请按上面的提示调整后重试」。两半出自同一个信封、同一份 body。
+  - **根因**：分类器判族用 `body.includes('"code":11128')`——对**一种序列化**做字节测试；上游 JSON 里
+    多一个空格、或把码写成字符串，判据就落空。而 `code 11128` 那半走 `parseUpstreamErrorDetail`
+    （`JSON.parse`），照旧读得到。**以下矩阵是把每行都跑在 HEAD 代码上测出来的**，不是推理：
+
+    | body 写法 | HEAD classify | HEAD detail.upstreamCode |
+    | --- | --- | --- |
+    | `{"code":11128}` | `channel_reject` | 11128 |
+    | `{"code": 11128}` | `client` ← 漏 | 11128 |
+    | `{"code":"11128"}` | `client` ← 漏 | `undefined` ← 也漏 |
+    | `{"error":{"code":11128}}` | `channel_reject` | `undefined` ← **反向**不一致 |
+    | `{"CODE":11128}` | `client` ← 漏 | `undefined` |
+  - **两种不同的错位**，报告者只能贴出第一种。第 2 行就是 #155 那条消息：分类器按 substring 说
+    `client`，展示那半按 `JSON.parse` 读到**顶层数字** `11128` 照旧打印 —— 一条回复里，诊断和它自己的
+    证据互相打脸。第 3–5 行对支持更糟、对用户不可见：不但两个读取器不一致，**连要求用户提供的那个码都
+    整个消失**，`channel_reject` 贴出来却没有 `11128` 可锚。第 4 行方向相反（substring 恰好命中嵌套的
+    `"code":11128`，解析器当时只认 `error.data.code`），说明这不是「换成解析器就完了」—— 两侧都得读同一个
+    事实，才可能一致。
+  - **代价不只是文案**：`client` 是**唯一不进渠道救援阶梯**的类别（`src/shim.ts` 的门是
+    `result.kind === 'channel_reject'`），于是 `forceNeutralHead` 与两级扰动重试一次都不会跑 —— 用户被
+    要求「调整请求后重试」，而插件根本没试过救援。`14003` 同族实测降级目标**随 HTTP 状态而变**：
+    `429 {"code": 14003}` → `soft_rate`、`400` → `client`，而 `model_busy` 是三个**不换号**的类别之一
+    （`isFailoverWorthy`）—— 落到 `soft_rate` 就是让整个账号池挨个烧一次真实请求去学一个模型级的事实。
+    `14018` spaced 单独看会掉成 `client`，实测只有当 `msg` 里带上了 `Credits exhausted` 那句话时才被
+    措辞标记救回 `hard_credit` —— 措辞一改就失效，正是本仓库反复记录的那类脆弱判据。
+  - **修法**：新增 `statesBusinessCode(body, code)`，`CHANNEL_REJECT_CODE`/`MODEL_BUSY_CODE`/
+    `CREDITS_EXHAUSTED_CODE` 三个常量从字符串形态改成数字，6 处家族判断统一走它。**三段读取，顺序即安全性**：
+    ① 信封自己声明的码是最终答案，**绝不再做文本扫描** —— 否则 `extError` 里嵌套的 `"code":11128` 会盖掉外层
+    `14003` 的自判，正好是 #127 反过来要的精度；② 解析成功却没在已知三种形态里声明码的 body，仍走带引号锚点
+    的文本扫描 —— 这条是**严格扩量**：#127 只留解析器，反而把 `{"error":{"code":11140}}` 这种旧文本匹配本来
+    认得的写法**收窄**掉了；③ 扫描锚在 `"code":<n>` 而非裸数字，十六进制 requestId 恰好含 `11128` 仍不能把
+    无关 body 提上来（原文本形态存在的理由，一并保留）。
+  - **一处先前例**：`CONTEXT_TOO_LONG_CODE`（`11115`，#101）早就写成 `/"code"\s*:\s*11115(?!\d)/u` —— 本仓库
+    **第三次**独立撞上同一个坑，前两次各修各的族，这就是为什么这次收成一个共享读取器，而不是第四处正则。
+  - **顺带修两处同源缺陷**：`envelopeError()` 已把 `code` 解析成数字，却只把 `msg` 交给分类器 —— 而 `msg`
+    永远不含 `"code":…`，于是每个「靠业务码判定」的族在这里都不可见，答案一律落到 `client`（#144 那条
+    `workbuddy upstream client (http 400): 请求被拦截，请重新发送` 就是一个插件已经握有其码的信封）；改为按
+    规范形重建 body 再分类。`parseUpstreamErrorDetail()` 原先只认**顶层**且 `typeof === 'number'` 的 `code`，
+    现与分类器共用 `businessCodeOfDocument`（补上 `{"error":{"code":…}}`，排在 `error.data.code` 之后以免
+    细节盖掉判定）—— 不再出现「按码判了类、却不打印码」。
+- **删掉一个账号后，该区域的持久化选择复活成死 id（#155 第二份报告）**
+  - **现象**：「删了一个账号就这样了」——CN 整块变「未登录」，提示「已保存的账号在本机已不存在」，而上方账号
+    列表**一条都不渲染**；`usage?region=cn&detail=fast` 答 `status=signed-out selectionLost=true`，但同一份
+    响应里明明还有 3 个 token 未过期的账号，国际版正常。报告者自己定位到 `cordis.patch.yml` 里
+    `accounts: cn: <本机已不存在的 id>`，并靠手发 `POST /__save {"field":"accounts","value":{"cn":""}}`
+    恢复的 —— 本条就是把那个手动动作变成自动。
+  - **根因是「只清了一半」**：`removeAccount()` 确实清了内存里的 `this.accountId`，所以**本次会话内一切正常**、
+    删除也回报成功；但设置文档里的死 id 一个字节都没动，下一次 `applySelection`（重启，或**任何一次设置保存**）
+    把它读回来重新 pin，区域随即掉进死胡同：`current()` 找不到 → `resolve()` 抛 no signed-in account →
+    走 `signed-out` 分支，而该状态下卡片的建议指向一个它自己并不渲染的列表。会话内看不出问题、故障延后到重启才
+    现形，正是这两步之间的缝隙让报告者和「删账号」连不起来。**只存在于内存的忘记不是修复，是拖延。**
+  - **修法**：`removeOne` 之后调用 `clearRegionAccountSelection()`，**只在被删账号正是本区持久化 pin 时**
+    写 `accounts[region] = ''`。判定与写入同在一个函数里，调用方无法只挑一半。四条约束都是这条修复的一部分：
+    - **写 `''`，绝不删键**：`''` 是「跟随 App 当前登录」的哨兵（也是全新安装的默认值，所以这是**恢复**而非
+      发明状态）；删掉的键含义是「从未配置」，会回落到旧版扁平 `accountId`，把用户**悄悄切到另一个账号**。
+    - **只清 pin 了该号的区域**：无关的删除必须零次写入 —— 内存里 `current()` 都拒绝回退到别的账号，
+      删除不能绕过它、从设置文件里做同样的事（换账号等于换人计费）。
+    - **整字段合并**：`accounts` 是两个区域共用的一张平表，按调用方视角重建会抹掉兄弟区域的 pin；判定与写入
+      都读 `describe()` 的权威文档，且先 `unwrapVolatileDeep` —— 把 volatile 的 `{get}` 活引用写进 payload，
+      settings 服务会整次拒绝（`found a function at $.ops[0].value.get`）。
+    - **同时覆盖旧版扁平 `accountId`**：pre-split 配置的 `accounts` 是空的、只靠扁平字段 pin，
+      `regionPinsAccount` 认这条；而哨兵会**终止**那次回落，所以一次写入同时 settle 两种写法。
+    - **fail-soft**：写设置失败只记 warn，绝不回报「删除失败」—— 凭证文件此刻已经真删了，说它还在是第二个谎。
+
+### Tests
+
+- `tests/issue155-envelope-spelling.spec.ts` 新增 23 条（#155）：紧凑/带空格/字符串码/嵌套四种写法 ×
+  11128/14003/14018/11140 四族；`{"CODE":11128}` 归族（这一半是**恢复**不是保留：member 层先前对 body
+  做了 `toLowerCase()` 因而认大写、`tests/issue98-channel-gate` 钉的是 member，而 family 层测的是原始 body、
+  不认 —— 现在一个读取器同时回答两侧）；十六进制 requestId 含 `11128` 不得被提上来；嵌套 `11128` 不得盖掉外层
+  `14003` 的自判；**分类器与展示给用户的那条码不许互相矛盾**。
+- `tests/issue155-account-removal.spec.ts` 新增 17 条（#155）：`regionPinsAccount` 四个方向（本区 pin 了=清 /
+  兄弟区 pin 了别的=不清 / 已在跟随 App=不写 / 只靠扁平字段 pin=清，且扁平字段只归它被归属的那个区）；
+  `nextAccountsSelection` 保兄弟区、只答 `accounts` 字段而非整个 section、`''` 作为数据保留（区别于缺键）；
+  volatile 活引用不得漏进 payload；无服务/无命名空间时零写入。
+- `tests/issue155-removal-e2e.spec.ts` 新增 5 条（#155 的**接线**）：真实 `apply()` + 真实路由 + 真实 config
+  对象（settings 双按引用答 `describe()`、`mutate` 原地提交并广播 `loader/volatile-update`），断言
+  「删除 → 触发那次重读（等价于重启或任何一次设置保存的 `applySelection`）→ 区域仍 `signed-in` 且
+  `selectionLost` 消失」这条旧代码做不到的完整链条；另测兄弟区 pin 存活、无关删除零次写入、写失败时删除仍回报
+  200。单独存在的理由与 `tests/pool-e2e.spec.ts` 相同：纯 helper 用例对着我自己写的 double，摘掉 `index.ts`
+  里的接线它们全绿。
+- 变异验证（每条都确认会让对应用例变红）：分类器退回 `body.includes('"code":N')` → **11 条红**；删掉
+  「本区是否 pin 了该号」的判定 → **4 条红**；写整个 section 而非 `accounts` 字段 → **4 条红**；
+  `removeOne` 退回只清内存 → **1 条红**（正是那条延后到重启才现形的链）。
+- 全量：`tsc` 双配置 0 错误，**146 文件 / 2536 通过（2 条按平台跳过）**，`tsdown` 构建通过。
+
 ## 5.12.2 (2026-10-27)
 
 > 两处修复：**① 装完重启插件消失**（#151）——把宿主提供的 `@earendil-works/pi-ai` 标成 optional

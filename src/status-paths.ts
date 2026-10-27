@@ -679,6 +679,94 @@ export function nextRegionEnabled(
 }
 
 /**
+ * The per-region account SELECTIONS map (`Config.accounts`), as plain data.
+ *
+ * `value` may be the whole settings SECTION or the `accounts` FIELD: `describe()`
+ * hands back the section with volatile fields as live references, and a blind
+ * spread of that leaks the `get()` function into a write payload — the settings
+ * service then refuses the whole save with `found a function at $.ops[0].value.get`
+ * (measured at the card's save endpoint, `src/web-status.ts`). Unwrapping first is
+ * what makes the merge carry data and not behaviour.
+ *
+ * The map is recognised by its KEYS, not by its shape: only region ids can appear
+ * in it, while a section always carries at least one non-region key (`authFile`,
+ * `regions`, `cliBridge`). Same direction as {@link regionsMapOf} chose for the
+ * reason documented there — a nested copy is a DIFFERENT, older value, so the
+ * outer object's own keys decide what it is.
+ */
+export function accountsMapOf(value: unknown): Record<string, unknown> {
+  const unwrapped = unwrapVolatileDeep(value)
+  if (!isRecord(unwrapped)) return {}
+  if (hasRegionKey(unwrapped)) return unwrapped
+  const nested = unwrapVolatileDeep(unwrapped['accounts'])
+  return isRecord(nested) ? nested : {}
+}
+
+/**
+ * Build the next `accounts` FIELD for one region's selection.
+ *
+ * ONLY the target region's key changes; the sibling region is carried over
+ * verbatim. `accounts` is a flat two-key map that BOTH regions write, so a
+ * whole-field write that rebuilt it from one caller's view would drop the other
+ * region's pin — the failure mode every other `next*` helper in this file exists
+ * to prevent, in a field that is easier to clobber because it looks trivial.
+ *
+ * The value is written as given, including `''`. That distinction is load-bearing
+ * and not a detail: `''` is the Clear sentinel ("this region follows the app's
+ * current sign-in"), while an ABSENT key means "never configured" and still falls
+ * back to the legacy flat `accountId` — see `selectAccountFor`. A helper that
+ * deleted the key to "clear" a region would silently re-bind it to whichever
+ * account the legacy field names.
+ */
+export function nextAccountsSelection(
+  value: unknown,
+  region: WorkBuddyWebRegion,
+  accountId: string,
+): Record<string, unknown> {
+  return { ...accountsMapOf(value), [region]: accountId }
+}
+
+/**
+ * Whether one region's selection is PERSISTENTLY bound to this account id.
+ *
+ * THE QUESTION {@link nextAccountsSelection} MUST ANSWER BEFORE WRITING. Two
+ * persisted sources can pin an account, and clearing only the obvious one leaves
+ * the other in place:
+ *
+ * 1. `accounts[region]` — the per-region slot, the current spelling.
+ * 2. the deprecated flat `accountId`, which `selectAccountFor` falls back to for
+ *    the ONE region the startup scan attributed it to (`legacyAccountRegion`) and
+ *    only when that region's slot is ABSENT. A pre-split profile therefore pins
+ *    its account through field 2 while field 1 holds nothing at all — and that
+ *    is precisely a profile whose user can remove an account and inherit an
+ *    orphaned pin.
+ *
+ * `accounts[region] === ''` answers `false` even when the id matches nothing: the
+ * sentinel means "this region follows the app's current sign-in", which already
+ * cannot point at a dead account, so there is nothing to clear and a write would
+ * be noise (and a needless settings round trip).
+ *
+ * @param value the resolved settings section, or the `accounts` field.
+ * @param region the region whose pin is being questioned.
+ * @param accountId the account about to be removed.
+ * @param legacyAccountId the deprecated flat `accountId`, read as persisted.
+ * @param legacyRegion which region the startup scan attributed that flat id to.
+ */
+export function regionPinsAccount(
+  value: unknown,
+  region: WorkBuddyWebRegion,
+  accountId: string,
+  legacyAccountId?: string,
+  legacyRegion?: WorkBuddyWebRegion,
+): boolean {
+  const configured = accountsMapOf(value)[region]
+  if (configured !== undefined) return configured === accountId
+  return legacyAccountId !== undefined
+    && legacyAccountId === accountId
+    && legacyRegion === region
+}
+
+/**
  * Whether one region's sidebar credit line is shown. Opt-out: only an explicit
  * `false` hides it, so a config written before this switch existed keeps the
  * line visible exactly as a fresh install does.

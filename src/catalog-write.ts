@@ -38,7 +38,13 @@
  * @module dsh-connect-workbuddy/catalog-write
  */
 
-import { regionsFieldIsCorrupt, regionsMapOf, unwrapVolatileDeep } from './status-paths.ts'
+import {
+  nextAccountsSelection,
+  regionPinsAccount,
+  regionsFieldIsCorrupt,
+  regionsMapOf,
+  unwrapVolatileDeep,
+} from './status-paths.ts'
 import type { WorkBuddyModelInfo } from './catalog.ts'
 import type { WorkBuddyRegion } from './upstream.ts'
 
@@ -140,5 +146,75 @@ export async function healRegionsField(
   // and `cliBridge` beside `regions`, so the question would always be "dirty".
   if (!regionsFieldIsCorrupt((section as Record<string, unknown>)['regions'])) return false
   await service.mutate(ns, [{ op: 'set', path: ['regions'], value: regionsMapOf(section) }], undefined)
+  return true
+}
+
+/**
+ * Drop one region's PERSISTED account selection, and only if it pinned this
+ * account.
+ *
+ * THE HOST-SIDE HALF OF ISSUE #155'S SECOND REPORT. A user removed one account
+ * and the whole CN tab turned into「已保存的账号在本机已不存在」, with no way back:
+ * the card's advice points at a list it does not render in that state, so the
+ * reporter escaped by hand-posting `{"field":"accounts","value":{"cn":""}}` to
+ * the save endpoint. This is that write, made automatic.
+ *
+ * WHY A WRITE AT ALL — the store already forgets. `removeAccount` clears the
+ * in-memory selection, which is why the region keeps working for the rest of the
+ * session. But the settings document still names the dead id, so the next
+ * `applySelection` — a restart, or any settings save — re-reads it, re-pins it,
+ * and the region falls back into the same dead end. An in-memory forget that is
+ * never persisted is not a fix; it is a delay.
+ *
+ * THE DECISION LIVES HERE, WITH THE WRITE, because the two must never be
+ * separated by a caller's guess. Clearing a region that did NOT pin this account
+ * would move the user off the account they chose, and「换账号等于换人计费」is the
+ * rule every writer in this plugin obeys: this function writes for exactly the
+ * region whose persisted pin names the account being removed, and no others.
+ *
+ * WRITES `''`, NEVER A DELETED KEY. The sentinel means "follow the app's current
+ * sign-in" — the plugin's documented default, which is what a fresh install does,
+ * so this restores a state rather than inventing one. An absent key means "never
+ * configured" and falls through to the legacy flat `accountId` (`selectAccountFor`),
+ * which would resurrect whichever account that field names: a silent switch
+ * through another door. The sentinel also TERMINATES that lookup, which is why one
+ * write settles both spellings — a pre-split profile pinned through the flat
+ * field is cleared by this same write.
+ *
+ * FAIL-SOFT BY CONTRACT: a service that cannot answer, or a region that pinned
+ * nothing, costs no write. The caller logs a failed mutation rather than failing
+ * the removal, because the credential file is already gone by then and reporting
+ * "could not remove" would be the lie.
+ *
+ * @param service The Host's settings service, or `undefined` to no-op.
+ * @param ns The namespace this plugin's settings live under.
+ * @param region The region being checked; the sibling is preserved by the merge.
+ * @param accountId The account about to be removed.
+ * @param legacyAccountId The deprecated flat `accountId`, as persisted.
+ * @param legacyRegion Which region the startup scan attributed that field to.
+ * @returns whether a write happened.
+ */
+export async function clearRegionAccountSelection(
+  service: HostSettingsService | undefined,
+  ns: string,
+  region: WorkBuddyRegion,
+  accountId: string,
+  legacyAccountId?: string,
+  legacyRegion?: WorkBuddyRegion,
+): Promise<boolean> {
+  if (service === undefined) return false
+  const row = service.describe().find(entry => entry.ns === ns)
+  if (row === undefined) return false
+  const section = row.value ?? {}
+  // Decide on the AUTHORITATIVE document, not on a snapshot the caller brought:
+  // a stale merge base is how a sibling region's settings disappear (issue #32's
+  // lesson, restated for this field). `nextAccountsSelection` preserves every key
+  // it was not asked to change, so the other region's pin rides through untouched.
+  if (!regionPinsAccount(section, region, accountId, legacyAccountId, legacyRegion)) return false
+  await service.mutate(
+    ns,
+    [{ op: 'set', path: ['accounts'], value: nextAccountsSelection(section, region, '') }],
+    undefined,
+  )
   return true
 }

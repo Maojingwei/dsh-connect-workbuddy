@@ -594,14 +594,14 @@ const HARD_CREDIT_MARKERS: readonly string[] = [
  * this guards against. Marker tables rot in a way codes do not: the gateway can
  * reword its sentence without changing the contract it advertises, and the
  * failure is silent (the branch simply stops matching). A code cannot drift like
- * that, and matching it in quoted-key form keeps a request id that happens to
- * contain the digits from promoting an unrelated body.
+ * that, and reading it (see {@link statesBusinessCode}) keeps a request id that
+ * happens to contain the digits from promoting an unrelated body.
  *
  * ONLY a corroborating signal, never a substitute: the code is checked in
  * addition to the markers, so a body that names the code AND reads as a policy
  * refusal still resolves by the marker table's order.
  */
-const CREDITS_EXHAUSTED_CODE = '"code":14018'
+const CREDITS_EXHAUSTED_CODE = 14018
 
 /** Session-invalidation markers that mean "sign in again in the WorkBuddy app". */
 const SESSION_DEAD_MARKERS: readonly string[] = ['Offline user session not found', '12153']
@@ -640,7 +640,22 @@ function businessCodeOf(body: string): number | undefined {
     return match?.[1] === undefined ? undefined : Number(match[1])
   }
   if (typeof parsed !== 'object' || parsed === null) return undefined
-  const raw = parsed as Record<string, unknown>
+  return businessCodeOfDocument(parsed as Record<string, unknown>)
+}
+
+/**
+ * The business code a PARSED failure document states, or `undefined`.
+ *
+ * ONE READER FOR TWO CALLERS (issue #155's second half). The classifier needs
+ * the code to decide a kind; `parseUpstreamErrorDetail` needs it to print
+ * `code 11128` in the reply the user pastes into an issue. The display half used
+ * to read only a top-level `code` that was `typeof === 'number'`, so for two of
+ * the spellings below the SAME body produced a diagnosis from the code while
+ * showing no code at all — and `client`/`channel_reject` is exactly the pair a
+ * reporter needs to be able to cross-check. Extracted so the two cannot drift
+ * again; `businessCodeOf` keeps the unparseable-body fallback on top of it.
+ */
+function businessCodeOfDocument(raw: Record<string, unknown>): number | undefined {
   const direct = asBusinessCode(raw['code'])
   if (direct !== undefined) return direct
   // The documented credit shape nests its verdict: {"error":{"data":{"code":…}}}.
@@ -651,6 +666,13 @@ function businessCodeOf(body: string): number | undefined {
       const nested = asBusinessCode((data as Record<string, unknown>)['code'])
       if (nested !== undefined) return nested
     }
+    // {"error":{"code":…}} — the OpenAI-shaped envelope, which this parser used
+    // to miss entirely (issue #155). Checked AFTER `error.data.code` so the
+    // documented nesting keeps precedence, and never past the top level: an
+    // `extError.code` names a PARAMETER, not the verdict, and promoting it would
+    // let a detail override the envelope's own answer.
+    const direct = asBusinessCode((error as Record<string, unknown>)['code'])
+    if (direct !== undefined) return direct
   }
   const data = raw['data']
   if (typeof data === 'object' && data !== null) {
@@ -666,22 +688,99 @@ function asBusinessCode(value: unknown): number | undefined {
   return undefined
 }
 
+/**
+ * Whether a failure body states this business code, in ANY of its spellings.
+ *
+ * THE BUG THIS REMOVES (issue #155). Three of the four code families below were
+ * recognised by `body.includes('"code":11128')` — a byte test on ONE
+ * serialization. Issue #127 had already proven that test unreliable, but it
+ * converted `11140` ONLY: measured on `6bdba2a`, `businessCodeOf` has exactly
+ * one call site, despite that commit's message claiming `11128` as well. So the
+ * SAME envelope answered one thing to the parser and another to the classifier.
+ * Measured row by row against the shipped code:
+ *
+ *   body                       classify         detail.upstreamCode
+ *   {"code":11128}             channel_reject   11128
+ *   {"code": 11128}            client ← 漏      11128
+ *   {"code":"11128"}           client ← 漏      undefined ← 也漏
+ *   {"error":{"code":11128}}   channel_reject   undefined ← 反向不一致
+ *   {"CODE":11128}             client ← 漏      undefined
+ *
+ * TWO DIFFERENT mismatches. Row 2 is what the reporter pasted into issue #155:
+ * `code 11128` in the text (`parseUpstreamErrorDetail` reads a top-level NUMBER,
+ * which JSON.parse delivers even for a spaced body) beside `"type":"client"`
+ * (decided by the substring) — a diagnosis disagreeing with its own evidence
+ * inside one message. Rows 3–5 are worse for support and invisible to the user:
+ * the readers disagree AND the code support asks for is missing entirely. Row 4
+ * runs the OTHER way (the substring happens to hit the nested `"code":11128`
+ * while the parser only knew `error.data.code`), which is why this could not be
+ * fixed by "just use the parser" — both readers must consult ONE fact.
+ * That is not cosmetic — `client` is the one kind that does NOT
+ * enter the channel rescue ladder (`src/shim.ts`, gated on
+ * `kind === 'channel_reject'`), so `forceNeutralHead` and both perturbation
+ * rungs never fired, and the user was told to "adjust the request" for a
+ * refusal the plugin had not actually tried to rescue. Issue #113's whole fix
+ * silently switches off depending on a space.
+ *
+ * THREE READS, IN THIS ORDER, and the ordering is the safety property:
+ *
+ * 1. A code the envelope STATES is final. `businessCodeOf` found one ⇒ that is
+ *    the answer, and the text scan below is never consulted. Without this rule,
+ *    OR-ing the two reads would let a nested sub-object's `"code":11128`
+ *    (inside `extError`, say) reclassify an envelope whose own verdict is
+ *    `14003` — promoting a detail over the verdict, the reverse of the precision
+ *    issue #127 bought.
+ * 2. A body that PARSES but states no code in the three shapes `businessCodeOf`
+ *    knows still gets the quoted-key text scan. That is where this fix strictly
+ *    widens the old behaviour: an undocumented nesting (`{"error":{"code":…}}`)
+ *    used to be recognised by the substring, and dropping it here would be a
+ *    regression dressed up as a refactor.
+ * 3. The scan anchors on `"code":<n>`, never the bare digits, so a hexadecimal
+ *    request id containing `11128` cannot promote an unrelated body — the hazard
+ *    the original quoted-key form existed to avoid, kept intact. The scan is
+ *    applied case-insensitively. This half RESTORES rather than preserves a
+ *    behaviour, and the two halves of the family disagreed about it: the member
+ *    predicates lower-cased the body before testing it (so `{"CODE":11128,…}`
+ *    matched, pinned by `tests/issue98-channel-gate`), while the family
+ *    predicate tested the RAW body and did not. One reader now answers both.
+ *
+ * The text form is derived from the number rather than declared beside it: two
+ * constants for one code are two truths that drift, and a stale text form would
+ * silently reinstate the bug above for exactly the spelling this function exists
+ * to catch.
+ */
+function statesBusinessCode(body: string, code: number): boolean {
+  const stated = businessCodeOf(body)
+  if (stated !== undefined) return stated === code
+  return body.toLowerCase().includes(`"code":${code}`)
+}
+
 /** The `11140` content-policy family, whatever the envelope's JSON spelling is. */
 const CONTENT_POLICY_CODE = 11140
 
 /**
- * Content-policy refusal markers from the chat gateway. The quoted-key form
- * avoids substring hits inside unrelated values (request ids are hex and can
- * contain `11140` by coincidence).
+ * Content-policy refusal markers from the chat gateway. The code is READ rather
+ * than text-matched so a request id cannot contain `11140` by coincidence and
+ * promote an unrelated body — and, since issue #155, so the ONE read is shared
+ * with every other family here instead of being a second, subtly different rule.
  *
  * `request illegal` is deliberately absent: the live `11128` channel-gate body
  * uses the SAME `msg`, so this marker used to run first and classify that gate
  * as `policy_reject`. The consequence was severe — the channel rescue ladder
  * never ran, the reply changed 400 to 403, and users were told to switch
  * accounts for a request-side refusal (issue #127).
+ *
+ * THE NESTING GAP #127 LEFT BEHIND, and why this now reads through
+ * {@link statesBusinessCode}. Issue #127 replaced the text match with the parser
+ * alone, which is exact for the three shapes that parser knows (`code`,
+ * `error.data.code`, `data.code`) — and therefore silently NARROWED coverage for
+ * a body whose code sits anywhere else, such as `{"error":{"code":11140}}`, which
+ * the old text match did catch. The helper keeps both: a code the envelope states
+ * wins outright (the precision #127 was after), and the text scan runs only when
+ * nothing was stated, where it can only restore a match the parser could not see.
  */
 function isContentPolicyBody(body: string): boolean {
-  return businessCodeOf(body) === CONTENT_POLICY_CODE
+  return statesBusinessCode(body, CONTENT_POLICY_CODE)
 }
 
 /**
@@ -797,26 +896,33 @@ export function isUndecodablePolicyBody(body: string): boolean {
 /**
  * Business code of the MODEL-scoped throttle (`14003`, "too many requests").
  *
- * The quoted-key form for the same reason as the policy markers: a request id is
- * hexadecimal and can contain the digits `14003` by coincidence, and a bare
- * substring search over an arbitrary failure body is how a red herring gets
- * promoted into a routing decision.
+ * A number rather than the quoted-key text form: the text match was exact for
+ * one serialization only, so a spaced or string-quoted envelope lost the
+ * `model_busy` kind and fell through to whatever its HTTP status says — measured
+ * at HEAD, `429 {"code": 14003}` became `soft_rate` and `400` became `client`.
+ * That is not a cosmetic rename: `model_busy` is one of the three NON-failover
+ * kinds (`isFailoverWorthy` in `src/shim.ts`), because the throttle is a fact
+ * about the MODEL and the next credential joins the same one — so `soft_rate`
+ * walks the whole pool burning a real request per account to learn nothing,
+ * while `client` prints neither the kind's advice nor its code (issue #155). See
+ * {@link statesBusinessCode}.
  */
-const MODEL_BUSY_CODE = '"code":14003'
+const MODEL_BUSY_CODE = 14003
 
 /**
  * Business code of the gateway's CHANNEL gate (`11128`, "Illegal API invocation
  * from an unapproved channel").
  *
- * The quoted-key form for the same reason as the markers above: a request id is
- * hexadecimal and can contain the digits `11128` by coincidence.
+ * A NUMBER, not the quoted-key text form it used to be. Matching the text was
+ * exact only for one serialization, which is the whole of issue #155 — see
+ * {@link statesBusinessCode}.
  *
  * A DIFFERENT gate from the one {@link conversationHeaders} works around, which
  * also answers `11128` (`conversation id missing`). The code is the same
  * because the gateway reuses it for every rule in that family; the BODY is what
  * tells them apart, so {@link isChannelRejectBody} requires both halves.
  */
-const CHANNEL_REJECT_CODE = '"code":11128'
+const CHANNEL_REJECT_CODE = 11128
 
 /**
  * Business code for "the request exceeded the model's context window" (issue #101).
@@ -939,13 +1045,13 @@ const MODEL_BUSY_TIPS_MARKERS: readonly string[] = [
  * SAME second. A 6004, by contrast, carries a `将在 … UTC+8 重置` sentence and
  * is per-account.
  *
- * So the criterion is the CODE alone, matched in its quoted-key form so a
- * request id that happens to contain the digits cannot promote it. Exported so
- * the probe and the chat path cannot drift into two different answers about one
- * body.
+ * So the criterion is the CODE alone, read by {@link statesBusinessCode} so a
+ * request id that happens to contain the digits cannot promote an unrelated
+ * body. Exported so the probe and the chat path cannot drift into two different
+ * answers about one body.
  */
 export function isModelBusyBody(body: string): boolean {
-  return body.includes(MODEL_BUSY_CODE)
+  return statesBusinessCode(body, MODEL_BUSY_CODE)
 }
 
 /** Whether a body carries the upstream's own "switch to a less busy model" advice. */
@@ -991,13 +1097,12 @@ export type ChannelGateMember =
 /**
  * Whether a failure body belongs to the `11128` gate family AT ALL.
  *
- * The code is matched in its quoted-key form (`"code":11128`): a request id is
- * hexadecimal and can contain the digits `11128` by coincidence, and a bare
- * substring search over an arbitrary failure body is how a red herring gets
- * promoted into a diagnosis.
+ * The code is READ, not text-matched (issue #155): a spaced or string-quoted
+ * envelope used to fall out of the family here, and out of the rescue ladder
+ * with it. {@link statesBusinessCode} keeps both reads.
  */
 export function isChannelGateFamilyBody(body: string): boolean {
-  return body.includes(CHANNEL_REJECT_CODE)
+  return statesBusinessCode(body, CHANNEL_REJECT_CODE)
 }
 
 /**
@@ -1050,14 +1155,13 @@ export function isChannelRejectBody(body: string): boolean {
  * `msg` can. Hence the wording is the criterion and the code is the
  * corroboration, never the other way round.
  *
- * BOTH halves are required, and the code is matched in its quoted-key form
- * (`"code":11128`): a request id is hexadecimal and can contain the digits
- * `11128` by coincidence, and a bare substring search over an arbitrary
- * failure body is how a red herring gets promoted into a diagnosis.
+ * BOTH halves are required, and the code is read by {@link statesBusinessCode}
+ * rather than text-matched, so a spaced envelope names its member too (issue
+ * #155). The wording half stays case-insensitive: it is prose.
  */
 export function isConversationIdGateBody(body: string): boolean {
-  const lower = body.toLowerCase()
-  return lower.includes(CHANNEL_REJECT_CODE) && lower.includes(CONVERSATION_ID_GATE_MARKER)
+  return statesBusinessCode(body, CHANNEL_REJECT_CODE)
+    && body.toLowerCase().includes(CONVERSATION_ID_GATE_MARKER)
 }
 
 /**
@@ -1071,11 +1175,12 @@ export function isConversationIdGateBody(body: string): boolean {
  *
  * Excluded from the prompt diagnosis for the same reason as
  * {@link isConversationIdGateBody}, and named by the same rule: the CODE plus
- * the WORDING, case-insensitively, code in its quoted-key form.
+ * the WORDING, the code read rather than text-matched (issue #155), the wording
+ * case-insensitively.
  */
 export function isFirstMessageGateBody(body: string): boolean {
-  const lower = body.toLowerCase()
-  return lower.includes(CHANNEL_REJECT_CODE) && lower.includes(FIRST_MESSAGE_GATE_MARKER)
+  return statesBusinessCode(body, CHANNEL_REJECT_CODE)
+    && body.toLowerCase().includes(FIRST_MESSAGE_GATE_MARKER)
 }
 
 /**
@@ -1169,7 +1274,7 @@ export function classifyUpstreamError(status: number, body: string): UpstreamErr
   // Ordered with the markers, i.e. BEFORE `model_busy`: a body carrying both an
   // exhaustion code and a throttling code still resolves to the actionable,
   // wallet-shaped answer.
-  if (body.includes(CREDITS_EXHAUSTED_CODE)) return 'hard_credit'
+  if (statesBusinessCode(body, CREDITS_EXHAUSTED_CODE)) return 'hard_credit'
   for (const marker of SESSION_DEAD_MARKERS) {
     if (body.includes(marker)) return 'session_dead'
   }
@@ -1312,7 +1417,14 @@ export function parseUpstreamErrorDetail(body: string): UpstreamErrorDetail | un
     ?? (typeof raw.msg === 'string' ? raw.msg : undefined)
   const tips = localizedText(raw.displayTips)
   const detail: UpstreamErrorDetail = {}
-  if (typeof raw.code === 'number') detail.upstreamCode = raw.code
+  // THE SAME READER THE CLASSIFIER USES (issue #155). This used to be
+  // `typeof raw.code === 'number'` on the top-level key only, so a spaced-string
+  // or nested envelope classified FROM its code while printing no code at all —
+  // the reporter's paste then carried `channel_reject` and no `11128` to anchor
+  // it, and the one field support asks for was missing for reasons that had
+  // nothing to do with the upstream.
+  const statedCode = businessCodeOfDocument(raw)
+  if (statedCode !== undefined) detail.upstreamCode = statedCode
   if (typeof raw.requestId === 'string') detail.requestId = raw.requestId
   if (typeof raw.msg === 'string' && raw.msg !== '') detail.rawMsg = raw.msg
   if (displayMsg !== undefined) detail.displayMsg = displayMsg
@@ -3048,10 +3160,21 @@ function parseEnterpriseInstant(value: string): number | undefined {
  * A JSON body on a 401/403 is still a credential refusal: the edge answered in
  * the business shape, but the token is just as unusable, so it maps to the same
  * actionable error instead of a generic "client" failure.
+ *
+ * THE CLASSIFIER IS HANDED THE CODE, NOT JUST THE SENTENCE (issue #155's sibling).
+ * `readEnvelope` has already parsed `code` as a number, and this call used to
+ * rebuild its diagnosis from `msg` alone — a sentence that never contains
+ * `"code":…`. Every family that decides on its business code was therefore
+ * invisible here, and the answer fell through to `client`: the report filed as
+ * `workbuddy upstream client (http 400): 请求被拦截，请重新发送` (#144) is one
+ * envelope whose code the Host was already holding. Re-stating the envelope in
+ * its canonical form is what lets the shared classifier see both halves it is
+ * written to read: the code, and the same `msg` wording it saw before. Strictly
+ * more information than the text-only call, never less.
  */
 function envelopeError(status: number, envelope: Envelope): Error {
   if (status === 401 || status === 403) return new WorkBuddyCredentialRejectedError(status)
-  const kind = classifyUpstreamError(status, envelope.msg)
+  const kind = classifyUpstreamError(status, `{"code":${envelope.code},"msg":${JSON.stringify(envelope.msg)}}`)
   return new Error(`workbuddy upstream ${kind} (http ${status}): ${envelope.msg.slice(0, 160)}`)
 }
 

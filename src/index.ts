@@ -39,7 +39,12 @@ import {
   repairedCatalog,
   resolveRoster,
 } from './catalog-sync.ts'
-import { healRegionsField, writeRegionCatalog, type HostSettingsService } from './catalog-write.ts'
+import {
+  clearRegionAccountSelection,
+  healRegionsField,
+  writeRegionCatalog,
+  type HostSettingsService,
+} from './catalog-write.ts'
 import { createAccountUsabilityProbe } from './credential-recovery.ts'
 import { BENEFIT_CACHE_MS, claimableBenefits, type WorkBuddyBenefitView } from './benefits.ts'
 import {
@@ -2579,8 +2584,44 @@ export function apply(ctx: Context, config: Config): void {
        * Forget ONE account's plugin-stored credential (the vault entry; the
        * desktop app's files are never touched). The card rescans afterwards,
        * so the row disappears the moment the write lands.
+       *
+       * AND DROP THE REGION'S PERSISTED PIN, when this was the pinned account
+       * (issue #155's second report). `removeAccount` forgets the selection in
+       * memory only, so the next `applySelection` — a restart, or any settings
+       * save — re-reads the dead id out of `accounts.<region>`, re-pins it, and
+       * the tab returns to「已保存的账号在本机已不存在」with the card's advice
+       * pointing at a list that state does not render. The clear is decided from
+       * the settings document rather than from the store, and is scoped to the
+       * one region that pinned this account: an unrelated removal must not move
+       * anybody off the account they chose.
+       *
+       * FAIL-SOFT, like the field repair above: the credential is already gone by
+       * the time this runs, so a settings write that cannot land must not be
+       * reported as a failed removal — that would tell the user the account is
+       * still there when it is not.
        */
-      removeOne: async (region, accountId) => stacks[region].store.removeAccount(accountId),
+      removeOne: async (region, accountId) => {
+        const removed = await stacks[region].store.removeAccount(accountId)
+        try {
+          await clearRegionAccountSelection(
+            hostSettings(),
+            settingsNs,
+            region,
+            accountId,
+            // Read the flat field as it is PERSISTED, not as the store holds it:
+            // the pre-split profile pins through this key while `accounts` is
+            // empty, and `selectAccountFor` falls back to it per region.
+            unwrapVolatile(current().accountId),
+            legacyAccountRegion,
+          )
+        } catch (error: unknown) {
+          ctx.logger.warn(
+            'dsh-connect-workbuddy: the account was removed, but the region could not be un-pinned from settings; the selection may reappear as orphaned after a restart',
+            error,
+          )
+        }
+        return removed
+      },
     },
     /**
      * OAuth QR sign-in for this card. The session lives in `src/oauth.ts`
