@@ -1,6 +1,6 @@
 # Changelog
 
-## 未发布
+## 5.12.2 (2026-10-27)
 
 > 两处修复：**① 装完重启插件消失**（#151）——把宿主提供的 `@earendil-works/pi-ai` 标成 optional
 > peer，使安装期不再因「闭包里解析不到它」而拒绝整个 generation；**② DSML 工具名一字之差**
