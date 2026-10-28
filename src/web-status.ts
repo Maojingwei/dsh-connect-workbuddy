@@ -638,6 +638,10 @@ const UPSTREAM_SWITCH_FIELDS: ReadonlySet<string> = new Set([
   // Issue #147: the transcript repair switch, driven from the card's reply
   // notice as well as its switch row.
   'dropForeignThinking',
+  // 渠道门拒绝后自动续发（见 `src/channel-continue.ts`）。整块写入：它有三个
+  // 字段，卡片只改 `enabled` 时也要把用户调过的上限与文本一起带上，否则一次
+  // 布尔写会把它们擦回默认值（同 `sessionTitle` 的处置）。
+  'channelRejectContinue',
 ])
 
 /** A non-null, non-array object: the only shape the slot merge applies to. */
@@ -1967,7 +1971,7 @@ export function registerWorkBuddyStatusRoute(ctx: Context, deps: WorkBuddyStatus
           // the CLI route off must not look like it reset them.
           if (field !== 'regions' && field !== 'accounts' && field !== 'cliBridge'
             && !(typeof field === 'string' && UPSTREAM_SWITCH_FIELDS.has(field))) {
-            return json(res, 400, { error: 'field must be regions, accounts, cliBridge, usageIdentity, keepPromptLast, extraInjectedPrefixes, sessionTitle or dropForeignThinking' })
+            return json(res, 400, { error: 'field must be regions, accounts, cliBridge, usageIdentity, keepPromptLast, extraInjectedPrefixes, sessionTitle, dropForeignThinking or channelRejectContinue' })
           }
           const rows = settings.describe()
           const row = rows.find((r: any) => String(r.ns).includes('workbuddy'))

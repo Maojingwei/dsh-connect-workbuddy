@@ -1833,6 +1833,9 @@ describe('registerWorkBuddyStatusRoute __save with a live-reference config', () 
       ['keepPromptLast', true],
       ['extraInjectedPrefixes', ['This is an efficiency nudge']],
       ['sessionTitle', { enabled: true, model: 'wb-lite' }],
+      // 渠道门自动续发：和 `sessionTitle` 一样是对象字段，卡片把用户调过的上限与
+      // 文本整块带上，所以这里也必须整块接受并原样落到自己的路径上。
+      ['channelRejectContinue', { enabled: true, maxConsecutive: 3, text: '继续' }],
     ] as const) {
       const { handler, mutateReceived, dispose } = await mountSaveRoutes()
       const { res, status } = saveResponse()

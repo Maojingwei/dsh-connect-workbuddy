@@ -19,6 +19,25 @@ declare module '@deepseek-ai/dsh-llm' {
     'codebuddy-bridge': {
       kind: 'codebuddy-bridge'
     }
+    /**
+     * The automatic 「继续」 sent after the gateway's channel gate refused a
+     * turn (see `src/channel-continue.ts`).
+     *
+     * Its own kind for the same reason as above — and one more: the engine's
+     * counter must be able to tell "the human typed something" (`kind: 'user'`)
+     * from "the plugin sent this". If both arrived as `'user'`, the plugin's own
+     * message would reset the consecutive counter and the cap of 3 could never
+     * be reached.
+     *
+     * `form: 'notice'` is the honest classification: one thing happened, it
+     * supersedes nothing, and the UI may show it as a one-line account rather
+     * than as a conversation turn the user authored.
+     */
+    'workbuddy-continue': {
+      kind: 'workbuddy-continue'
+      form: 'notice'
+      summary: string
+    }
   }
 }
 

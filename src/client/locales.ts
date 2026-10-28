@@ -456,6 +456,14 @@ export const en = {
   'row.sessionTitleHint': 'The host fires one title request per new session and bills it at the main model rate. This re-points that one request at a hidden lightweight model. The request still happens either way. Off by default.',
   'row.sessionTitleModel': 'Target model:',
   'row.extraPrefixesCount': 'Custom injected prefixes in effect:',
+  // The channel-gate auto-continue. The copy has to say three things at once —
+  // what failure it reacts to, that it spends real requests, and that the cap
+  // counts CONSECUTIVE sends — because the switch is off by default and the
+  // user's only other source for any of it is the config file.
+  'row.channelRejectContinueLabel': 'Resend 「继续」 after the gateway refuses the request',
+  'row.channelRejectContinueHint': 'When the gateway answers 400 with code 11128 (「被网关的渠道校验拦截」), the turn just fails: the plugin never retries it in place and never swaps accounts, because the gate matches the message openings and every account sends the same ones. Sending it again as a NEW turn is the manual remedy, and it can pass because the request is rebuilt. This does that automatically, sending the text below. It spends a real request each time. Stops after N CONSECUTIVE sends — one successful turn, or one message you type yourself, resets the count. Subagent sessions are never touched. Off by default. Takes effect immediately, no reload.',
+  'row.channelRejectContinueLimit': 'Max consecutive sends:',
+  'row.channelRejectContinueText': 'Text sent:',
   'row.cliBridgeLabel': 'Let the local CodeBuddy CLI do the work',
   'row.cliBridgeHint': 'Adds the codebuddy_ask tool and the /codebuddy command. Each call spends CodeBuddy quota. injectResult only affects /codebuddy — its result is injected back into the session, costing one DSH turn when the session is idle; tool calls never read it. Rate-limited: 6 turns per session per hour, 20 per process per hour, one turn at a time. Off by default.',
   // The three quick-adjust pins of the route: which model and which reasoning
@@ -995,6 +1003,13 @@ export const zh: Record<WorkBuddySettingsKey, string> = {
   'row.sessionTitleHint': '宿主每个新会话都会发一次标题请求，并按主模型费率计费；开启后这一次改投隐藏的轻量模型。请求无论开不开都会发出。默认关闭。',
   'row.sessionTitleModel': '目标模型：',
   'row.extraPrefixesCount': '生效的自定义注入前缀：',
+  // 渠道门自动续发。这段文案要同时说清三件事：它只对哪一种失败起作用、它会花掉
+  // 真实请求、上限数的是**连续**次数——因为开关默认关闭，而用户了解这些的唯一
+  // 其他途径就是配置文件。
+  'row.channelRejectContinueLabel': '被网关渠道校验拦截后，自动再发一次「继续」',
+  'row.channelRejectContinueHint': '上游用 400 + code 11128（「被网关的渠道校验拦截」）拒绝时，这一轮就直接失败了：插件不会在原地重试，也不会换号——网关匹配的是消息的开头，每个账号发出去的开头都一样。手动「把这条消息再发一次」才是有效的办法，因为那会重新组装一份请求；这个开关就是把它自动化，发送下面这句文本。每次都会真实消耗一次请求。连续发送 N 次后停止：中间只要成功过一轮，或你自己发了一条消息，计数立刻清零。子代理会话一律不碰。默认关闭。改完立即生效，不必重载插件。',
+  'row.channelRejectContinueLimit': '连续发送上限：',
+  'row.channelRejectContinueText': '发送的文本：',
   'row.cliBridgeLabel': '允许调用本机 CodeBuddy CLI 干活',
   'row.cliBridgeHint': '开启后多出 codebuddy_ask 工具与 /codebuddy 指令；每次调用花 CodeBuddy 配额。injectResult 只影响 /codebuddy：其结果回注会话，会话空闲时多花一次 DSH 回合；工具调用不读它。限流：每会话每小时 6 回合、每进程每小时 20 回合、同时只跑一个回合。默认关闭。',
   // 本地 CLI 路由的三个快调旋钮：跑哪个模型、哪个推理档位、按什么顺序

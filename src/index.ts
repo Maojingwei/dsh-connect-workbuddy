@@ -59,6 +59,11 @@ import {
 } from './adapter.ts'
 import { createContextRescue } from './context-rescue.ts'
 import type { RescueAgents, RescueCompaction, RescueTokenMeter } from './context-rescue.ts'
+import {
+  channelContinueSettingsOf,
+  installChannelContinue,
+  type ContinueAgent,
+} from './channel-continue.ts'
 import type { WorkBuddyAdapter, ForeignThinkingBlock } from './adapter.ts'
 import { createWorkBuddyShim } from './shim.ts'
 import { MEDIA_MODEL_TTL_MS, registerWorkBuddyImageTool, type ToolsServiceLike } from './image-tool.ts'
@@ -628,6 +633,36 @@ export interface Config {
      */
     model?: string
   }
+  /**
+   * 被网关渠道校验拦截（`channel_reject` / 11128）之后自动再发一次「继续」，
+   * 可选、有上限。默认关闭。
+   *
+   * 这条失败**不换号也不重试**（`isFailoverWorthy` 刻意把它排除在外：网关匹配的
+   * 是消息开头，换账号只会每个账号白烧一次请求），所以这一轮就此结束，用户看到的
+   * 是「本轮运行失败400: … 被网关的渠道校验拦截 …」。而新开一个回合会让宿主重新
+   * 组装 surface，确实可能通过 —— 这正是 `docs/PINNED-11128-RETRY.md` 里那条
+   * 「把这条消息再发一次」的手动做法。
+   *
+   * 默认关闭的理由与 {@link Config.usageIdentity} 相同：它会在用户没有发消息的
+   * 情况下花掉真实请求，属于必须显式授权的开销。上限按用户要求默认 3 次。
+   */
+  channelRejectContinue?: {
+    /**
+     * 是否启用自动续发。只有显式 `true` 才算开启。
+     */
+    enabled?: boolean
+    /**
+     * 连续自动续发的次数上限（默认 3，夹在 1..10）。
+     *
+     * 「连续」是关键：一次成功回合、或者用户自己发了一条消息，计数立刻清零。
+     * 所以上限拦的是「一直过不去就一直试」，而不是这个会话一生的总次数。
+     */
+    maxConsecutive?: number
+    /**
+     * 续发时发送的文本，默认「继续」。
+     */
+    text?: string
+  }
 }
 
 const modelConfig = z.object({
@@ -922,6 +957,14 @@ export const Config: z<Config> = z.object({
     }).default({})
       .description('Move the host session-title request onto a hidden lightweight model (issues #132/#133). The host fires one real upstream request per new session either way; enabled re-points it at `model` (default wb-lite, measured 0 credits by the reporter) instead of billing the main paid model. Request volume still counts, and the lightweight model is reporter-measured, not reproduced here. Sampled when the plugin mounts: reload the plugin (or restart the host) after changing it.'),
   ) as unknown as z<{ enabled: boolean, model: string }>,
+  channelRejectContinue: asVolatile(
+    z.object({
+      enabled: z.boolean().default(false),
+      maxConsecutive: z.number().step(1).min(1).max(10).default(3),
+      text: z.string().default('继续'),
+    }).default({})
+      .description('After the gateway refuses a turn with `channel_reject` (business code 11128), send 「继续」 once more automatically — optional and capped. Off by default: it spends a real request without the user typing anything. That refusal is deliberately NOT retried in place and NOT failed over (every account sends the same opening), so the turn would otherwise just fail; a new turn rebuilds the request surface, which is the manual "send it again" remedy docs/PINNED-11128-RETRY.md already recommends. `maxConsecutive` (default 3) counts CONSECUTIVE auto-sends: one successful turn, or one real user message, resets it. Subagent sessions are never touched. Live: the engine reads this on every failure, so no reload is needed.'),
+  ) as unknown as z<{ enabled: boolean, maxConsecutive: number, text: string }>,
 }) as unknown as z<Config>
 
 /**
@@ -1410,6 +1453,49 @@ export function apply(ctx: Context, config: Config): void {
 
   let current = () => config
   let invalidateCatalog = (): void => {}
+
+  /**
+   * 渠道门拒绝（`channel_reject` / 11128）之后的自动「继续」。
+   *
+   * 挂在这里而不是 adapter 里，理由是**它要的是一个新回合**：adapter 只看得到
+   * 一次请求，`channel_reject` 在同一个请求内已经跑完三级救援阶梯，再在那一层
+   * 重发就是把被拒的字节原样再送一遍。宿主把这一轮判死之后才追加 `turn/end`，
+   * 而新回合会让宿主重新组装 surface —— 那才是 `docs/PINNED-11128-RETRY.md`
+   * 里「把这条消息再发一次」真正做的事。
+   *
+   * 会花真实请求，所以开关默认关闭，且只在用户显式打开后才读配置（见
+   * `channelContinueSettingsOf`：只有 `=== true` 算开启）。
+   */
+  const disposeChannelContinue = installChannelContinue({
+    // 活值：用户拨动开关之后，下一次失败立刻按新值处置，不必重载插件。
+    getConfig: () => {
+      const block = unwrapVolatile(current().channelRejectContinue) as
+        | { enabled?: unknown, maxConsecutive?: unknown, text?: unknown }
+        | undefined
+      return channelContinueSettingsOf(block?.enabled, block?.maxConsecutive, block?.text)
+    },
+    // 每次发送时现取 agent：用户可能在两次失败之间关掉了会话，而缓存的 agent
+    // 引用会 followup 到一个已经不在的会话上。
+    getAgent: sessionId => {
+      const agents = (ctx as unknown as { get(service: string): unknown }).get('agents') as
+        | { get(id: string): ContinueAgent | undefined }
+        | undefined
+      return agents?.get(sessionId)
+    },
+    log: message => { ctx.logger.warn(`dsh-connect-workbuddy: ${message}`) },
+    // `session/event` 是宿主事件，本插件没有 `@deepseek-ai/dsh-session` 这条
+    // peer 依赖（也不该有，只为一条监听引入它不划算）。鸭子类型的 cast 只在这
+    // 一行，引擎本身因此可以在没有宿主包的测试里逐条验证。
+    //
+    // 返回值的真实类型是 `() => boolean`（「取消时它是否还在」），这里照实写：
+    // 声明成 `() => void` 也是可赋值的，但那条断言会骗过将来的一次重构，让
+    // 「退订失败」这个信息从类型上消失。
+    onSessionEvent: listener =>
+      (ctx as unknown as {
+        on(name: string, handler: (session: unknown, event: unknown) => void): () => boolean
+      }).on('session/event', listener),
+  })
+  ctx.effect(() => () => { disposeChannelContinue() })
 
   /**
    * REPAIR a region's saved directory against the live upstream roster.

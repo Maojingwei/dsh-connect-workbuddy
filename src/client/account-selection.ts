@@ -70,6 +70,15 @@ export type UpstreamSwitchField =
   | 'keepPromptLast'
   | 'extraInjectedPrefixes'
   | 'sessionTitle'
+  /**
+   * The opt-in auto-continue after a `channel_reject` (see
+   * `src/channel-continue.ts`).
+   *
+   * An OBJECT field like `sessionTitle`, so a boolean write would erase the
+   * tuned cap and text — the card sends the whole block with only `enabled`
+   * changed.
+   */
+  | 'channelRejectContinue'
 
 /**
  * Whether a save failure is a FILE-CONTENTION refusal.
@@ -238,6 +247,45 @@ export function extraInjectedPrefixesOf(configured: unknown): string[] {
 }
 
 /**
+ * The `channelRejectContinue` block's defaults, mirroring the Host schema.
+ *
+ * Duplicated here rather than imported from the Host entry on purpose: this
+ * module is the browser half's node-free boundary (`src/index.ts` pulls in the
+ * whole provider stack), and the two values must agree, which a test pins.
+ */
+const CHANNEL_CONTINUE_DEFAULTS = { enabled: false, maxConsecutive: 3, text: '继续' } as const
+
+/**
+ * Read the `channelRejectContinue` block out of a settings snapshot.
+ *
+ * Same defensive shape as {@link sessionTitleOf}: anything missing or malformed
+ * resolves to the schema's own defaults, so the card shows what the plugin will
+ * actually do instead of an empty control — and an absent block reads as OFF,
+ * because enabling this spends real requests without the user typing anything.
+ *
+ * @param configured - the whole settings snapshot.
+ * @returns the three values the switch renders.
+ */
+export function channelRejectContinueOf(
+  configured: unknown,
+): { enabled: boolean, maxConsecutive: number, text: string } {
+  const raw = unwrapVolatileDeep((configured as Record<string, unknown> | undefined)?.['channelRejectContinue'])
+  const block = typeof raw === 'object' && raw !== null && !Array.isArray(raw)
+    ? raw as Record<string, unknown>
+    : {}
+  const max = block['maxConsecutive']
+  const capped = typeof max === 'number' && Number.isFinite(max)
+    ? Math.min(10, Math.max(1, Math.trunc(max)))
+    : CHANNEL_CONTINUE_DEFAULTS.maxConsecutive
+  const text = block['text']
+  return {
+    enabled: block['enabled'] === true,
+    maxConsecutive: capped,
+    text: typeof text === 'string' && text.trim() !== '' ? text.trim() : CHANNEL_CONTINUE_DEFAULTS.text,
+  }
+}
+
+/**
  * Write one upstream-identity switch, verifying it landed.
  *
  * Same two writers as {@link writeCliBridgeEnabled} and for the same measured
@@ -254,7 +302,7 @@ export function extraInjectedPrefixesOf(configured: unknown): string[] {
 export async function writeUpstreamSwitch(
   scope: WorkBuddyAccountScope,
   field: UpstreamSwitchField,
-  value: boolean | readonly string[] | { enabled: boolean, model: string },
+  value: boolean | readonly string[] | { enabled: boolean, model: string } | { enabled: boolean, maxConsecutive: number, text: string },
 ): Promise<void> {
   let hostError: unknown
   try {
@@ -279,7 +327,9 @@ export async function writeUpstreamSwitch(
       ? upstreamSwitchOf(after, field) === value
       : field === 'sessionTitle'
         ? JSON.stringify(sessionTitleOf(after)) === JSON.stringify(value)
-        : JSON.stringify(extraInjectedPrefixesOf(after)) === JSON.stringify([...value as readonly string[]])
+        : field === 'channelRejectContinue'
+          ? JSON.stringify(channelRejectContinueOf(after)) === JSON.stringify(value)
+          : JSON.stringify(extraInjectedPrefixesOf(after)) === JSON.stringify([...value as readonly string[]])
     if (landed) return
   }
   throw hostError instanceof Error

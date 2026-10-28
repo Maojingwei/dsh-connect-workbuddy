@@ -410,6 +410,7 @@ dsh-subagent-default-model (MIT) ──► dsh-connect-trae (MIT, LaoDing)      
 | `src/adapter.ts` | `dsh-workbuddy-connect` (MIT) → `dsh-codex-connect` (Apache-2.0) 转引 |
 | `src/bin.ts` / `src/host-heartbeat.ts` | `dsh-workbuddy-connect` (MIT)；改动：扩展多账号诊断 |
 | `src/catalog.ts` / `src/web-status.ts` / `src/client/*` | `dsh-connect-trae` (MIT) → `dsh-subagent-default-model` (MIT) 转引 |
+| `src/channel-continue.ts` | `dsh-client-auto-continue` (MIT) + `dsh-purge` (MIT)；改动：只认 `channel_reject` 一种失败、不换号、不原地重试、不落盘计数，且订阅由调用方注入（无 `dsh-session` peer 依赖）。逐条差异见该文件头部 |
 
 ### 5.4 分发层面
 

@@ -62,7 +62,7 @@ import type {
   WorkBuddyWebSearchPath,
   WorkBuddyWebUsage,
 } from '../status-paths.ts'
-import { cliBridgeEffortOf, cliBridgeEnabledOf, cliBridgeModelOf, cliBridgeRegionOrderOf, extraInjectedPrefixesOf, isFileContentionWriteError, sessionTitleOf, upstreamSwitchOf, writeAccountSlot, writeCliBridgeEnabled, writeCliBridgeEffort, writeCliBridgeModel, writeCliBridgeRegionOrder, writeRegionCreditPosition, writeRegionCreditsShown, writeRegionEnabled, writeRegionImageToolEnabled, writeRegionPreferredVideoModels, writeRegionVideoToolEnabled, writeRegionModels, writeUpstreamSwitch } from './account-selection.ts'
+import { channelRejectContinueOf, cliBridgeEffortOf, cliBridgeEnabledOf, cliBridgeModelOf, cliBridgeRegionOrderOf, extraInjectedPrefixesOf, isFileContentionWriteError, sessionTitleOf, upstreamSwitchOf, writeAccountSlot, writeCliBridgeEnabled, writeCliBridgeEffort, writeCliBridgeModel, writeCliBridgeRegionOrder, writeRegionCreditPosition, writeRegionCreditsShown, writeRegionEnabled, writeRegionImageToolEnabled, writeRegionPreferredVideoModels, writeRegionVideoToolEnabled, writeRegionModels, writeUpstreamSwitch } from './account-selection.ts'
 import { AccountPool } from './AccountPool.tsx'
 import { OAuthSignIn } from './OAuthSignIn.tsx'
 import { AccountTransfer } from './AccountTransfer.tsx'
@@ -701,6 +701,8 @@ function WorkBuddyCardBody({ t, settingsScope, view }: WorkBuddyCardProps & { vi
   const [keepPromptLastBusy, setKeepPromptLastBusy] = useState(false)
   const [sessionTitleOn, setSessionTitleOn] = useState<boolean | undefined>(undefined)
   const [sessionTitleBusy, setSessionTitleBusy] = useState(false)
+  const [channelRejectContinueOn, setChannelRejectContinueOn] = useState<boolean | undefined>(undefined)
+  const [channelRejectContinueBusy, setChannelRejectContinueBusy] = useState(false)
   /**
    * Probe results, keyed by region then model id.
    *
@@ -1313,6 +1315,20 @@ function WorkBuddyCardBody({ t, settingsScope, view }: WorkBuddyCardProps & { vi
     extraInjectedPrefixesOf(settingsScope?.getSnapshot().value)
 
   /**
+   * The auto-continue block after a channel-gate refusal (see
+   * `src/channel-continue.ts`), read the three-level way the other switches are.
+   *
+   * The cap and the text are read from the committed document rather than
+   * mirrored in card state: only `enabled` has a control here, so a local copy of
+   * the other two would be a second source of truth for values this card can
+   * only READ.
+   */
+  const channelRejectContinueValue = (): { enabled: boolean, maxConsecutive: number, text: string } => {
+    const committed = channelRejectContinueOf(settingsScope?.getSnapshot().value)
+    return channelRejectContinueOn === undefined ? committed : { ...committed, enabled: channelRejectContinueOn }
+  }
+
+  /**
    * Flip one upstream-identity switch.
    *
    * No `refreshUsage` afterwards, unlike the CLI switch: these change the shape
@@ -1321,23 +1337,32 @@ function WorkBuddyCardBody({ t, settingsScope, view }: WorkBuddyCardProps & { vi
    * stall #131 was about) for a number that cannot have moved.
    */
   const toggleUpstreamSwitch = async (
-    field: 'usageIdentity' | 'keepPromptLast' | 'sessionTitle',
+    field: 'usageIdentity' | 'keepPromptLast' | 'sessionTitle' | 'channelRejectContinue',
     enabled: boolean,
   ): Promise<void> => {
     if (settingsScope === undefined) return
     const setBusy = field === 'usageIdentity'
       ? setUsageIdentityBusy
-      : field === 'keepPromptLast' ? setKeepPromptLastBusy : setSessionTitleBusy
+      : field === 'keepPromptLast'
+        ? setKeepPromptLastBusy
+        : field === 'sessionTitle' ? setSessionTitleBusy : setChannelRejectContinueBusy
     const setOwn = field === 'usageIdentity'
       ? setUsageIdentityOn
-      : field === 'keepPromptLast' ? setKeepPromptLastOn : setSessionTitleOn
+      : field === 'keepPromptLast'
+        ? setKeepPromptLastOn
+        : field === 'sessionTitle' ? setSessionTitleOn : setChannelRejectContinueOn
     setBusy(true)
     try {
-      // `sessionTitle` is the one switch whose field is an OBJECT: preserve the
-      // committed target model instead of writing the transport shape away.
+      // `sessionTitle` and `channelRejectContinue` are the two switches whose
+      // field is an OBJECT: preserve their committed companions instead of
+      // writing the transport shape away. Both carry values with no control on
+      // this card (the title's target model, the cap and text here), so a bare
+      // boolean would erase settings the user can only edit in the config file.
       const value = field === 'sessionTitle'
         ? { ...sessionTitleOf(settingsScope.getSnapshot().value), enabled }
-        : enabled
+        : field === 'channelRejectContinue'
+          ? { ...channelRejectContinueOf(settingsScope.getSnapshot().value), enabled }
+          : enabled
       await writeUpstreamSwitch(settingsScope, field, value)
       if (mounted.current) setOwn(enabled)
     } catch (error: unknown) {
@@ -2600,6 +2625,57 @@ function WorkBuddyCardBody({ t, settingsScope, view }: WorkBuddyCardProps & { vi
     </div>
   )
 
+  /**
+   * The opt-in auto-continue after a channel-gate refusal.
+   *
+   * Its own group, NOT a row in {@link upstreamSwitches} above, because it
+   * breaks that group's one shared promise: those four are sampled when the
+   * plugin mounts and need a reload, while this one is read on every failure and
+   * takes effect immediately. Hiding that difference behind a shared hint would
+   * teach the user the wrong rule for exactly the switch where being wrong is
+   * expensive — this one spends real requests.
+   *
+   * The cap and the text are REPORTED while the switch is on, not edited: both
+   * already live in the config file, and the cap is the one number the user asked
+   * to be exactly 3, so an unvalidated free-text field here would be a second way
+   * to get it wrong.
+   */
+  const channelRejectContinuePreference = (
+    <div className="dsm-workbuddy-prefs">
+      <label
+        className="dsm-workbuddy-pref dsm-workbuddy-upstream-pref"
+        title={t('row.channelRejectContinueHint')}
+      >
+        {/* This input carries ONLY its own class, deliberately NOT
+            `dsm-workbuddy-upstream-check`: that class is the contract the
+            upstream-switch suite reads to enumerate "the switches that need a
+            reload", and this one is not in that set. */}
+        <input
+          type="checkbox"
+          className="dsm-workbuddy-channel-continue-check"
+          checked={channelRejectContinueValue().enabled}
+          disabled={!canWrite || saving || poolBusy || channelRejectContinueBusy}
+          onChange={(event: { target: { checked: boolean } }) => {
+            void toggleUpstreamSwitch('channelRejectContinue', event.target.checked)
+          }}
+        />
+        <span className="dsm-workbuddy-pref-copy">
+          <span className="dsm-workbuddy-pref-label">{t('row.channelRejectContinueLabel')}</span>
+          <span className="dsm-workbuddy-pref-hint">{t('row.channelRejectContinueHint')}</span>
+          {channelRejectContinueValue().enabled
+            ? (
+              <span className="dsm-workbuddy-pref-hint">
+                {t('row.channelRejectContinueLimit')} {String(channelRejectContinueValue().maxConsecutive)}
+                {' · '}
+                {t('row.channelRejectContinueText')} {channelRejectContinueValue().text}
+              </span>
+            )
+            : null}
+        </span>
+      </label>
+    </div>
+  )
+
   const creditPreferences = (
     <div className="dsm-workbuddy-prefs">
       {cliBridgePreference}
@@ -3272,6 +3348,7 @@ function WorkBuddyCardBody({ t, settingsScope, view }: WorkBuddyCardProps & { vi
                 <p className="dsm-workbuddy-panel-note">{t('row.panelCapabilitiesHint')}</p>
                 {creditPreferences}
                 {upstreamSwitches}
+                {channelRejectContinuePreference}
               </div>
               {/* DIAGNOSTICS — the third section, and the one that earns its tab
                   by holding nothing the other two already say: the facts a bug
