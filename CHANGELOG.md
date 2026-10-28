@@ -1,5 +1,50 @@
 # Changelog
 
+## 5.13.0 (2026-10-28)
+
+> 用户贴的那条失败：`本轮运行失败400: {"message":"workbuddy 上游失败：被网关的渠道校验拦截（不是账号、
+> 额度或网络问题）（http 400）（code 11128，requestId …）。…","type":"channel_reject"}`，
+> 以及一句明确的需求：「当我收到这样的信息的时候，自动发送继续，并且如果连续收到3次就不再发送」。
+> 这条需求成立的前提是搞清楚**为什么重发可能有用**，因为插件自己在 `perturbChannelFingerprints` 旁的
+> 注释一直说「给定提示词被拒是确定性的」，而现场报告反复说「再发一次就过了」。两者其实不矛盾：**新回合
+> 是一份重新组装的请求**（surface 重排、注入块位置变化、学到扰动偏好后第一发就带扰动），所以「再发一次」
+> 不是把被拒的字节原样再塞一遍——那是 `channel_reject` 被排除在 `isFailoverWorthy` 之外的同一条理由。
+
+### Features
+
+- **可选：渠道门拒绝（`channel_reject` / 11128）之后自动再发一次「继续」，连续上限 3 次**
+  - **为什么需要它**：这一类失败在插件里是**三重不救**——不换号（`isFailoverWorthy` 刻意排除：网关读的是
+    消息开头，换账号只会每个账号白烧一次真实请求）、不在原地重试（同一请求内的三级救援阶梯
+    `forceNeutralHead` → 一次零宽扰动 → 密集零宽扰动已经跑完）、宿主也不重试（400 不在
+    `DEFAULT_RETRYABLE_CODES` 里，`LvFailure.code` 还会被 pi-ai 按 `/\b400\b/` 重新分类成
+    `INVALID_REQUEST`）。于是这一轮直接结束，用户看到的就是那句 400。
+  - **它做什么**：`session/event` 上认 `turn/end` + `reason.kind === 'error'` + 这一类失败 → 等 300ms →
+    `agent.followup(createUserMessage(...))` 发一条 `继续`。**不做**任何换号、换区、改请求体的事。
+  - **上限的语义是「连续」**（`maxConsecutive`，默认 3）：一次 `completed` 回合、或一条
+    `source.kind === 'user'` 的消息立即清零；**插件自己发的那条不清零**——否则我们自己发的消息会把计数
+    抹掉，上限永远不生效（这条单独有测试钉住）。`aborted` + `reason.kind === 'user'`（用户点了停止）
+    也清零，同 `dsh-purge` / `auto-continue` 的处置。
+  - **不做的四件事**：子代理会话一律不碰（它的回合由父代理驱动）；`status === 'running'` 时不发（宿主可能
+    自己起了新回合）；收件箱里有排队内容时不发（用户可能正在打字，抢在前面会让模型先答错东西）；
+    `turn/start` 一来就取消已排定的那一条。
+  - **失败如何识别**：`code === 'channel_reject'`，或消息里带插件自己的 kind 字面量 / 它自己的那句
+    「渠道校验拦截」。**刻意不用 `code` 单值判定**——宿主那一份 `code` 极可能已经被 pi-ai 从文本重分类成
+    `INVALID_REQUEST`，只看它会漏掉每一次真实失败。
+  - **默认关闭**，因为每次都会真实消耗一次请求，与 `usageIdentity` / `imageToolEnabled` 同一条规则。
+    它是本插件里**唯一改完即生效**的上游类开关：引擎每次失败现读配置，不必重载插件（因此它**不在**那组
+    「改完需重载」的提示里，而是自己一组）。
+  - **卡片**：「能力」栏新增一个开关（`.dsm-workbuddy-channel-continue-check`），展开时回报上限与发送
+    文本；这两个值卡片只读不写，写入时整块带上，一次布尔写不会把它们擦回默认（同 `sessionTitle` 的处置）。
+  - **测试**：`tests/channel-continue.spec.ts`（引擎 30 例，含上限、清零、不清零、子代理、running、
+    收件箱忙、seq 去重、卸载、会话数上限、事件总线缺失时功能失效而非拖垮插件）、
+    `tests/channel-continue-wiring.spec.ts`（真 `apply()` 挂载：真的订阅了、真的读到活配置、
+    真的随 fiber 卸载）、`tests/card-channel-continue.spec.tsx`（渲染与写入契约）、
+    `tests/web-status.spec.ts`（`__save` 白名单整块接受）。
+  - **溯源**：「连续失败上限」的语义来自 `dsh-client-auto-continue`（MIT，HsiangNianian），
+    「哪些失败码不续 / 收件箱忙不插队 / 用 `source.kind` 区分真人介入」来自 `dsh-purge`
+    （MIT，YuJunZhiXue）。两者都只是**思路参照**，未复制源码；相对它们本实现是收窄。
+    已同步写入 `THIRD_PARTY_NOTICES.md`、两份 README 的致谢与 `docs/DESIGN.md` §5.3 的分发表。
+
 ## 5.12.4 (2026-10-28)
 
 > issue #159 的**报告现象成立，归因不成立**。现场确实出现了「三级救援一级都没跑」的 `11128`，但把它

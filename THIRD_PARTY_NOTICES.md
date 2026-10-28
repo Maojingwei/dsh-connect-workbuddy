@@ -35,6 +35,15 @@
 | `dsh-subagent-default-model` | <https://github.com/dingminhua/dsh-subagent-default-model> | `dsm-*` 卡片 CSS、`row.*` 文案键约定、品牌图标 | **MIT**（Copyright (c) 2026 LaoDing） |
 | `dsh-codex-connect` | <https://github.com/franksong2702/dsh-codex-connect> | DSH 插件结构与 pi-ai provider 注册的参照（经 `dsh-workbuddy-connect` 转引） | **Apache-2.0** |
 
+### 与「失败后自动续跑」相关（5.13.0 新增）
+
+| 项目 | 仓库 | 参考内容 | 许可证 |
+| --- | --- | --- | --- |
+| `dsh-client-auto-continue` | <https://github.com/HsiangNianian/dsh-auto-continue> | 「连续失败上限」这一整套语义：发出时 `consecutive` 自增、达到 `maxConsecutive` 停止、成功回合清零、`session.header.origin === 'subagent'` 跳过子代理、用 `agent.followup(createUserMessage(...))` 投递。`src/channel-continue.ts` 只取这层语义，未照搬其约 1590 行的引擎（收尾原因矩阵、自适应退避、自主循环、循环守卫、通知） | **MIT** |
+| `dsh-purge` | <https://github.com/YuJunZhiXue/dsh-purge> | `lib/continue-retry.js` 的三处做法：`NO_CONTINUE_CODES`（配额/限流/传输这类「重发也拿同一句回答」的失败不续）、`inboxBusy`（收件箱有排队就不插队）、以及用 `user/message` 的 `source.kind` 区分真人介入与插件自己的消息 | **MIT** |
+
+> 两项均为**思路参照**，未复制其源码。本项目相对两者是收窄：只认 `channel_reject` 一种失败、不换号、不原地重试、不落盘状态。逐条差异写在 `src/channel-continue.ts` 的头部注释里（`docs/DESIGN.md` §5.3 要求）。
+
 ## 三、Apache-2.0 特别说明
 
 `dsh-codex-connect` 采用 **Apache License 2.0**，其义务重于 MIT。本项目对它的参考是**间接的**：经由 `dsh-workbuddy-connect` 转引其 DSH 插件结构与 provider 注册思路。即便如此，本项目仍遵守 Apache-2.0 第 4 条的要求：
