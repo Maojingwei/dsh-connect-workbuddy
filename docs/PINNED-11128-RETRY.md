@@ -74,8 +74,9 @@
 
 - **每次都要等到分钟级才回错** → **≤ 5.12.3** 的密集救援 rung 是 O(n²)：92 KB 要 82.7 s，130 KB 的提示词要两分多钟。从外面看，「跑了 82 秒」和「根本没跑」是同一件事——这也是 [#159](https://github.com/dingminhua/dsh-connect-workbuddy/issues/159) 「三级救援一级都没跑」这个观察的一个可解释来源。5.12.4 已改为线性扫描，同样是 92 KB，**82.7 s → 10 ms**，规则与输出逐字节不变。
 
-> 升级路径：npm `latest` 为 **5.12.4**（2026-10-28）。插件市场点更新即可，不用重新登录 App。
+> 升级路径：npm `latest` 为 **5.13.1**（2026-10-29）。插件市场点更新即可，不用重新登录 App。
 > **≤4.14.1 的用户请先升级再看本楼**：那一档缺的不只是救援，还包括 5.12.3 的判族修复与 4.15.1 起的「回显宿主原始 body」。
+> **5.13.1 起**已知的固定指纹在发出前按句改写，「先重试」对这一族不再是首选做法——见 [#162](https://github.com/dingminhua/dsh-connect-workbuddy/issues/162) 置顶。
 
 ## 4. 重试几次仍不行
 
@@ -84,18 +85,20 @@
 - **每一轮都 400**，且证据行里被扫描的消息开头全部标着「不在插件已知名单里」→ 网关新增了词条。请把那条开头贴回来（[#159](https://github.com/dingminhua/dsh-connect-workbuddy/issues/159) 现场那条 `system` 有 130,345 字符；该事件里的 Web-GUI 提示段已由 5.12.3 的定向破坏覆盖）。
 - **只有某一个模型失败** → 大概率不是这一类，先看码：`14003`（模型繁忙）是**模型级**限流，不换号、但**宿主会自动重试几次**（它有界，500 ms→10 s 退避），出口是换模型；`6020/6021/6022`（排队）既不换号、也**不会**被自动重发（插件明确告诉宿主不要重试），要等或换模型。分类见 [#125](https://github.com/dingminhua/dsh-connect-workbuddy/issues/125) §1。
 
-## 5. 全部 open issue 索引（7 条，截至 2026-10-28）
+## 5. 相关 issue 索引（截至 2026-10-29）
 
 | # | 标题 | 是什么 | 重试有用吗 |
 |---|---|---|---|
 | [125](https://github.com/dingminhua/dsh-connect-workbuddy/issues/125) | 【置顶汇总】400 / 上游失败：分类总表、渠道门实测事实、报告模板 | 本楼的技术底座 | — 先读它 §1，分清「不是同一种 400」 |
 | [150](https://github.com/dingminhua/dsh-connect-workbuddy/issues/150) | 国际版开始封号了 | `403` / `code 11140`「账号存在异常行为，已被限制使用」——拒的是**这个账号**，不是这条请求 | ❌ 重试、换号都救不了。插件会把该账号停权并换下一个；回池实测只有手动「测试」一条路（账号 id 是 `uin` 哈希，重登后 id 不变）。要立刻继续干活请走 [#156](https://github.com/dingminhua/dsh-connect-workbuddy/issues/156) |
 | [153](https://github.com/dingminhua/dsh-connect-workbuddy/issues/153) | 希望对多模态模型的上传进行调整 | 功能询问：ds4.1f 传不了图 | ❌ 与 400 无关。答案是**在插件设置里给该模型勾上「图片输入」**（逐模型开关），已在该楼答复并附图 |
-| [155](https://github.com/dingminhua/dsh-connect-workbuddy/issues/155) | workbuddy 不让连了 | ≤5.12.2 判族漏判（`"type":"client"` 与正文 `code 11128` 自相矛盾），整套救援没跑。5.12.3 已修 | ⚠️ 在 ≤5.12.2 上重试也没用，**先升级**（§2 ④） |
+| [155](https://github.com/dingminhua/dsh-connect-workbuddy/issues/155) | workbuddy 不让连了（已关闭） | ≤5.12.2 判族漏判（`"type":"client"` 与正文 `code 11128` 自相矛盾），整套救援没跑。5.12.3 已修 | ⚠️ 在 ≤5.12.2 上重试也没用，**先升级**（§2 ④） |
 | [156](https://github.com/dingminhua/dsh-connect-workbuddy/issues/156) | 【置顶】WorkBuddy 用不了时，可以改用姊妹插件 Trae / Qoder | 整条通道不可用时的替代路线 | ❌ 另一条通道，不是本插件的行为 |
-| [159](https://github.com/dingminhua/dsh-connect-workbuddy/issues/159) | 11128 的三级救援被 `!controller.signal.aborted` 挡掉 | 报告「三级救援一级都没跑」，归因到三处 abort 门 | ⚠️ **现象成立、归因不成立**。5.12.4 修的是同一个阶梯上的另一个真缺陷（密集 rung 的 O(n²)，见 §3 末条）；三处 abort 门经实测**保留**——删掉会把诊断从 `channel_reject` 改成自造的 `server`，还会为一个从未上线的请求记一笔假账号测量 |
-| [160](https://github.com/dingminhua/dsh-connect-workbuddy/issues/160) | workbuddy用不了 | 本楼 §1 的样例：文案指向 **4.13.2–4.14.1** | ⚠️ **先升级**——那一档三级阶梯还不存在，重试只会拿到同一个 400 |
+| [159](https://github.com/dingminhua/dsh-connect-workbuddy/issues/159) | 11128 的三级救援被 `!controller.signal.aborted` 挡掉（已关闭） | 报告「三级救援一级都没跑」，归因到三处 abort 门 | ⚠️ **现象成立、归因不成立**。5.12.4 修的是同一个阶梯上的另一个真缺陷（密集 rung 的 O(n²)，见 §3 末条）；三处 abort 门经实测**保留**——删掉会把诊断从 `channel_reject` 改成自造的 `server`，还会为一个从未上线的请求记一笔假账号测量 |
+| [160](https://github.com/dingminhua/dsh-connect-workbuddy/issues/160) | workbuddy用不了（已关闭） | 本楼 §1 的样例：文案指向 **4.13.2–4.14.1** | ⚠️ **先升级**——那一档三级阶梯还不存在，重试只会拿到同一个 400 |
+| [162](https://github.com/dingminhua/dsh-connect-workbuddy/issues/162) | 【置顶】5.13.1：这类 400 先改词，自动「继续」降为最后兜底 | 现在的**权威处置**：改词表、开关边界、报告模板 | — 5.13.1 起以它为准，本楼只是存档 |
+| [163](https://github.com/dingminhua/dsh-connect-workbuddy/issues/163) | 5.13.0 版本失效（已关闭，5.13.1 修复） | 本轮取证：100 次同 body 全 400、零宽被归一化、`user` / `tool` 不扫、整段组合指纹、零历史新会话 | ❌ 对固定 system 指纹**无效**——已由 5.13.1 的按句改词解决 |
 
 ---
 
-**一句话收尾**：这一类 400 不是账号问题、不是额度问题、也不是网络问题——它是网关在读你这份请求的**内容**。插件已经在请求内部替你救了三轮，三级全失败才会把这条报错交给你。所以**先把这条消息再发一次**；如果文案里根本没有「并已用…重试过」那半句，那不是重试的问题，是版本问题（§3），先升级。反复不过再按 §4 报告。
+**一句话收尾**：这一类 400 不是账号问题、不是额度问题、也不是网络问题——它是网关在读你这份请求的**内容**。**5.13.1 起**，已知的固定指纹在发出前就按句改写成同义写法，这是主修复；三级救援仍然会在请求内部兜一遍，自动「继续」只是默认关闭、默认 1 次的最后兜底。所以**先升级到 5.13.1 并重载插件**，不要先重发；如果文案里根本没有「并已用…重试过」那半句，那不是重试的问题，是版本问题（§3）。反复不过就按 §4 贴证据。
