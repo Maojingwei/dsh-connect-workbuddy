@@ -179,30 +179,38 @@ describe('the dense rescue rung: cost stays linear in body size', () => {
   })
 
   it('cost grows with the body, not with its SQUARE', () => {
-    // A RATIO, not an absolute bound: absolute timings vary with the machine,
-    // but a quadratic rule shows up as ~4x per doubling no matter how fast the
-    // hardware is. Measured while writing this, with the old rule restored and
-    // this very measurement taken: 6 KB → 281 ms and 12 KB → 1123 ms, i.e.
-    // exactly 4.0x. So the ceiling has to sit BELOW 4 — an 8x allowance (the
-    // first attempt) would have passed the quadratic rule and pinned nothing.
+    // AN ABSOLUTE CEILING AT A SIZE WHERE THE TWO IMPLEMENTATIONS DIFFER BY
+    // ORDERS OF MAGNITUDE — not a ratio of two small samples.
     //
-    // 3x leaves room for GC and the sparse pass over the same body while still
-    // failing on a doubling cost of 4x. Linear work over a doubling is 2x, so
-    // the margin either side of the threshold is comfortable.
+    // A ratio was tried first and it is the wrong instrument here. Measured on
+    // CI (ubuntu, 2026-10-28): 60 KB took 10 ms and 120 KB took 34 ms, i.e. a
+    // "ratio" of 3.4 against a 3x ceiling — a FAILURE for a correct linear
+    // implementation. At single-digit-millisecond scale the ratio measures timer
+    // granularity, GC and the fixed per-call pass, not the growth being claimed.
+    // Meanwhile a genuinely quadratic rule at that size is still only
+    // milliseconds, so the ratio cannot discriminate at 60 KB either way.
+    //
+    // The discriminating size is a big one. Measured on the development machine
+    // (median of 5, after a warm-up): 40 KB 3.5 ms, 80 KB 7.3 ms, 160 KB 11.2 ms,
+    // 320 KB 28.8 ms, 640 KB 69.3 ms — clean ~2x per doubling. The OLD rule at
+    // 92 KB took 82.7 s, so at 320 KB it lands around fifteen MINUTES. Any
+    // ceiling in between separates the two decisively, with no noise problem:
+    // 5 s is ~170x the linear implementation's headroom on a fast machine and
+    // still more than two orders of magnitude below the quadratic one.
     const measure = (chars: number): number => {
       const body = bodyOf(chars)
-      const started = Date.now()
-      perturbChannelFingerprints(body, true)
-      // Floor at 1ms so a sub-millisecond measurement cannot produce a
-      // meaningless ratio.
-      return Math.max(Date.now() - started, 1)
+      const started = performance.now()
+      const out = perturbChannelFingerprints(body, true)
+      const elapsed = performance.now() - started
+      expect(out, 'the dense rung produced no body at all').toBeDefined()
+      return elapsed
     }
-    // Warm up, so the first measured call does not pay for JIT compilation, and
-    // use a size big enough that the fixed per-call overhead cannot mask the
-    // growth being measured.
-    measure(30_000)
-    const small = measure(60_000)
-    const large = measure(120_000)
-    expect(large / small, `60 KB took ${small}ms, 120 KB took ${large}ms`).toBeLessThan(3)
+    // Warm up so the first measured call does not pay for JIT compilation.
+    measure(40_000)
+    // Median of three, so one scheduling hiccup on a shared CI runner cannot
+    // turn this into a flaky failure.
+    const samples = [measure(320_000), measure(320_000), measure(320_000)].sort((a, b) => a - b)
+    const median = samples[1] as number
+    expect(median, `dense rescue took ${median.toFixed(1)}ms on a 320 KB body`).toBeLessThan(5_000)
   })
 })
