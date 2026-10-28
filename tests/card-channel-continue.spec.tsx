@@ -109,7 +109,7 @@ describe('the channel-gate auto-continue switch', () => {
     if (save === undefined) throw new Error('no __save call was made')
     const body = JSON.parse(save.init.body) as { field: string, value: unknown }
     expect(body.field).toBe('channelRejectContinue')
-    expect(body.value).toEqual({ enabled: true, maxConsecutive: 3, text: '继续' })
+    expect(body.value).toEqual({ enabled: true, maxConsecutive: 1, text: '继续' })
   })
 
   it('explains that it spends a request and that the cap counts consecutive sends', async () => {
@@ -157,11 +157,11 @@ describe('the channel-gate auto-continue switch', () => {
  */
 describe('reading the block out of a settings snapshot', () => {
   it('reads the schema defaults for anything missing or malformed', () => {
-    expect(channelRejectContinueOf({})).toEqual({ enabled: false, maxConsecutive: 3, text: '继续' })
-    expect(channelRejectContinueOf(undefined)).toEqual({ enabled: false, maxConsecutive: 3, text: '继续' })
+    expect(channelRejectContinueOf({})).toEqual({ enabled: false, maxConsecutive: 1, text: '继续' })
+    expect(channelRejectContinueOf(undefined)).toEqual({ enabled: false, maxConsecutive: 1, text: '继续' })
     // Garbage that is not an object must not fabricate an enabled switch.
-    expect(channelRejectContinueOf({ channelRejectContinue: 'on' })).toEqual({ enabled: false, maxConsecutive: 3, text: '继续' })
-    expect(channelRejectContinueOf({ channelRejectContinue: [1, 2] })).toEqual({ enabled: false, maxConsecutive: 3, text: '继续' })
+    expect(channelRejectContinueOf({ channelRejectContinue: 'on' })).toEqual({ enabled: false, maxConsecutive: 1, text: '继续' })
+    expect(channelRejectContinueOf({ channelRejectContinue: [1, 2] })).toEqual({ enabled: false, maxConsecutive: 1, text: '继续' })
     // Only an explicit true is ON.
     expect(channelRejectContinueOf({ channelRejectContinue: { enabled: 'yes' } }).enabled).toBe(false)
     expect(channelRejectContinueOf({ channelRejectContinue: { enabled: 1 } }).enabled).toBe(false)
@@ -174,7 +174,7 @@ describe('reading the block out of a settings snapshot', () => {
     expect(channelRejectContinueOf({ channelRejectContinue: { maxConsecutive: 7 } }).maxConsecutive).toBe(7)
     expect(channelRejectContinueOf({ channelRejectContinue: { maxConsecutive: 0 } }).maxConsecutive).toBe(1)
     expect(channelRejectContinueOf({ channelRejectContinue: { maxConsecutive: 99 } }).maxConsecutive).toBe(10)
-    expect(channelRejectContinueOf({ channelRejectContinue: { maxConsecutive: 'many' } }).maxConsecutive).toBe(3)
+    expect(channelRejectContinueOf({ channelRejectContinue: { maxConsecutive: 'many' } }).maxConsecutive).toBe(1)
   })
 
   it('unwraps a volatile live reference', () => {

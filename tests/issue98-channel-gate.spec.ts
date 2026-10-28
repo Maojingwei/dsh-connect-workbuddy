@@ -60,6 +60,13 @@ import {
 /** The DSH fingerprint the CN gateway refuses (measured, issue #98). */
 const DSH_FINGERPRINT = 'You are an AI agent powered by DeepSeek Harness.'
 
+/**
+ * What the request path now sends instead (issue #163): the phrase is rewritten
+ * before the prefix head would be needed, so the neutral head is NOT prepended
+ * for this one anymore.
+ */
+const DSH_FINGERPRINT_REWRITTEN = 'You are an AI agent running inside DeepSeek Harness.'
+
 /** The other fingerprint in the measured snapshot: Claude Code's own head. */
 const CLAUDE_FINGERPRINT = "You are Claude Code, Anthropic's official CLI for Claude."
 
@@ -114,7 +121,7 @@ describe('array-shaped system content: every text part is scanned (measured fact
     expect(Array.isArray(content)).toBe(true)
     expect(content).toHaveLength(1)
     expect(content[0]?.type).toBe('text')
-    expect(visible(content[0]?.text ?? '')).toBe(`${WORKBUDDY_FALLBACK_SYSTEM_PROMPT}\n\n${DSH_FINGERPRINT}\n\nAnd the rest of the prompt.`)
+    expect(visible(content[0]?.text ?? '')).toBe(`${DSH_FINGERPRINT_REWRITTEN}\n\nAnd the rest of the prompt.`)
   })
 
   it('neutralises a fingerprint in the SECOND part too', () => {
@@ -180,7 +187,7 @@ describe('array-shaped system content: every text part is scanned (measured fact
     const content = body.messages[0]?.content as { type: string; text: string }[]
     expect(content[0]?.text).toBe('A perfectly ordinary opening.')
     expect(content[1]?.text).toBeDefined()
-    expect(visible(content[1]?.text ?? '')).toBe(`${WORKBUDDY_FALLBACK_SYSTEM_PROMPT}\n\n${DSH_FINGERPRINT}\n\nAnd the rest of the prompt.`)
+    expect(visible(content[1]?.text ?? '')).toBe(`${DSH_FINGERPRINT_REWRITTEN}\n\nAnd the rest of the prompt.`)
   })
 
   it('survives a malformed part without throwing', () => {
@@ -198,22 +205,26 @@ describe('array-shaped system content: every text part is scanned (measured fact
 })
 
 describe('string-shaped system content keeps behaving exactly as before', () => {
-  it('prepends the neutral head to a matching opening', () => {
+  it('rewrites a matching opening instead of prepending a head', () => {
+    // Since issue #163 the request path rewrites the measured DSH identity,
+    // so the prefix head is no longer needed for this one: the opening the
+    // gateway sees is already a different sentence.
     const body = prepared({
       messages: [{ role: 'system', content: DSH_FINGERPRINT }, { role: 'user', content: 'hi' }],
     })
-    expect(visible(body.messages[0]?.content as string)).toBe(`${WORKBUDDY_FALLBACK_SYSTEM_PROMPT}\n\n${DSH_FINGERPRINT}`)
+    expect(visible(body.messages[0]?.content as string)).toBe(DSH_FINGERPRINT_REWRITTEN)
     expect(body.messages[1]?.content).toBe('hi')
   })
 
-  it('does NOT prepend the neutral head to a mid-text fingerprint', () => {
+  it('does not prepend a head to a mid-text fingerprint; the rewrite removes it', () => {
     // Measured fact 3: the PREFIX gate only reads the START, so a prompt that
-    // merely MENTIONS a third-party identity gets no head. The clause inside it
-    // is still broken by the substring defence — that is a different gate, and
-    // this assertion is about the head only, which is what fact 3 measures.
+    // merely MENTIONS a third-party identity gets no head. The sentence rewrite
+    // still removes the phrase, because the third measured fingerprint is
+    // position-independent (issue #163).
     const prompt = 'Rules: be nice.\n\nYou are an AI agent powered by DeepSeek Harness.'
     const body = prepared({ messages: [{ role: 'system', content: prompt }] })
-    expect(visible(body.messages[0]?.content as string)).toBe(prompt)
+    expect(visible(body.messages[0]?.content as string))
+      .toBe(`Rules: be nice.\n\n${DSH_FINGERPRINT_REWRITTEN}`)
     expect(body.messages[0]?.content as string).not.toContain(WORKBUDDY_FALLBACK_SYSTEM_PROMPT)
   })
 

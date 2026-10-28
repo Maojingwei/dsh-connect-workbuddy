@@ -1997,6 +1997,138 @@ function scansOpening(role: unknown): boolean {
 }
 
 /**
+ * The gateway's current content fingerprints, and same-meaning rewrites for
+ * them (issue #163).
+ *
+ * WHY REWRITE INSTEAD OF ZERO-WIDTH. On 2026-10-29 two independent probes
+ * measured that the CN gateway normalizes invisible characters before matching:
+ * the DSH identity with U+200B at every word boundary still answers 11128.
+ * `breakIdentityClauses` and both perturbation rungs therefore cannot help this
+ * family. A real wording change is what the same probes measured as 200.
+ *
+ * WHY SENTENCE-LEVEL, NOT ONE WHOLE-PARAGRAPH LITERAL. The third fingerprint is
+ * an eight-sentence, roughly 800-character @-path paragraph. Two reporters
+ * measured that each sentence alone answers 200 and the whole paragraph answers
+ * 400 — it is a COMBINATION, not a single listed sentence. Replacing the
+ * paragraph as one literal would stop matching the moment the host changes one
+ * word; replacing every sentence breaks the combination and keeps working when
+ * only some of the text moves. The rows below are the table proposed in issue
+ * #163 (yicneggima-glitch, 18:56; QIYU-PLUS, 18:57), with the identity and Web
+ * GUI rows both probes measured.
+ *
+ * `from` strings are matched ANYWHERE, not just at an opening, because the
+ * measured rule is position-independent. Only a hit is replaced; every other
+ * byte is left alone, so an ordinary conversation is unchanged.
+ */
+const CHANNEL_GATE_PHRASES: readonly (readonly [string, string])[] = [
+  [
+    'You are an AI agent powered by DeepSeek Harness',
+    'You are an AI agent running inside DeepSeek Harness',
+  ],
+  [
+    'You are a coding agent powered by the ',
+    'You are a coding agent running on the ',
+  ],
+  [
+    'You are interacting with the user through the DeepSeek Harness Web GUI',
+    'You are working with the user inside the DeepSeek Harness Web GUI',
+  ],
+  // Reported by liyixin21 and found in appulsexi-maker's real system prompt
+  // (issue #163, 19:12). Same-meaning rewrite; the table is meant to grow.
+  [
+    'Agent Teams is available in this session',
+    'Agent Teams is enabled for this session',
+  ],
+  // The @-path paragraph, one sentence (or semicolon/colon clause) at a time.
+  [
+    'Tokens prefixed with @ are paths the user explicitly referenced.',
+    'Paths that begin with @ are the ones the user explicitly referenced.',
+  ],
+  [
+    'Relative paths resolve from the workspace root;',
+    'Relative paths are resolved against the workspace root;',
+  ],
+  [
+    'absolute paths identify files or directories on the host.',
+    'absolute paths point at files or directories on the host.',
+  ],
+  [
+    'A trailing slash marks a directory:',
+    'A trailing slash indicates a directory:',
+  ],
+  [
+    'list it when its contents matter.',
+    'list it whenever its contents matter.',
+  ],
+  [
+    'Anything else is a file:',
+    'Everything else is a file:',
+  ],
+  [
+    'use the read tool when its contents are needed,',
+    'use the read tool whenever you need its contents,',
+  ],
+  [
+    'and do not claim to have inspected it before reading.',
+    'and never claim to have inspected it before reading it.',
+  ],
+  [
+    '@"..." quotes a path containing spaces.',
+    'A path containing spaces is quoted with @"...".',
+  ],
+]
+
+/**
+ * Rewrite the measured gate phrases in one text part.
+ *
+ * Exported for the tests and for callers that build a body themselves. It is
+ * idempotent: every `to` string is different from its `from` string and no
+ * rewrite recreates another `from` string, so a second pass is a no-op.
+ */
+export function rewriteChannelFingerprintPhrases(text: string): string {
+  let out = text
+  for (const [from, to] of CHANNEL_GATE_PHRASES) {
+    if (out.includes(from)) out = out.replaceAll(from, to)
+  }
+  return out
+}
+
+/**
+ * Apply {@link rewriteChannelFingerprintPhrases} to every scanned text part.
+ *
+ * `system` and `assistant` only (the roles the gate reads). `user` and `tool`
+ * are deliberately untouched: QIYU-PLUS re-measured both on 2026-10-29 and
+ * both answer 200 with the DSH identity at an opening, and rewriting a user's
+ * own words would change the conversation for no gate.
+ */
+function rewriteChannelFingerprintPhrasesInBody(obj: Record<string, unknown>): void {
+  const messages = obj['messages']
+  if (!Array.isArray(messages)) return
+  for (const value of messages) {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) continue
+    const message = value as Record<string, unknown>
+    if (!scansOpening(message['role'])) continue
+    const content = message['content']
+    if (typeof content === 'string') {
+      const next = rewriteChannelFingerprintPhrases(content)
+      if (next !== content) message['content'] = next
+      continue
+    }
+    if (!Array.isArray(content)) continue
+    for (const part of content) {
+      if (typeof part !== 'object' || part === null || Array.isArray(part)) continue
+      const record = part as Record<string, unknown>
+      const type = record['type']
+      if (typeof type !== 'string' || type.trim().toLowerCase() !== 'text') continue
+      const text = record['text']
+      if (typeof text !== 'string') continue
+      const next = rewriteChannelFingerprintPhrases(text)
+      if (next !== text) record['text'] = next
+    }
+  }
+}
+
+/**
  * Move every scanned message (`system` and `assistant`) off the content
  * fingerprint above by prepending the placeholder head.
  *
@@ -2858,6 +2990,10 @@ export function prepareChatBody(source: string, options?: PrepareChatBodyOptions
   if (options?.keepPromptLast === true && Array.isArray(obj['messages'])) {
     keepPromptLast(obj['messages'], injectedPrefixPattern(options.extraInjectedPrefixes))
   }
+  // BEFORE neutralisation on purpose: the rewrite matches the host's own
+  // wording, and `neutralizeChannelFingerprints` would insert U+200B inside a
+  // phrase first, making the `replaceAll` miss it (issue #163, owner's order).
+  rewriteChannelFingerprintPhrasesInBody(obj)
   neutralizeChannelFingerprints(obj)
   normalizeToolChoice(obj)
   dropRefusedReasoning(obj)

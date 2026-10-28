@@ -114,12 +114,12 @@ describe('prepareChatBody', () => {
     expect(prepareChatBody('not json')).toBe('not json')
   })
 
-  it('neutralizes a system prompt that opens with a fingerprinted agent head', () => {
+  it('rewrites a system prompt that opens with a fingerprinted agent head', () => {
     // Measured on the real gateways (2026-10-21): a `system` message beginning
     // with "You are an AI agent powered by DeepSeek Harness" is refused by the
-    // domestic gateway with business code 11128 ("unapproved channel"), and the
-    // byte-identical body with one neutral line prepended returns 200. Every CN
-    // step of a DSH session failed at step 1 until this prepend existed.
+    // domestic gateway with business code 11128 ("unapproved channel").
+    // Issue #163 superseded the prepend for this one: the sentence is rewritten,
+    // so the gateway sees a different opening and no head is needed.
     const prompt = 'You are an AI agent powered by DeepSeek Harness.\n\nSecond line.'
     const prepared = JSON.parse(prepareChatBody(JSON.stringify({
       messages: [
@@ -128,7 +128,9 @@ describe('prepareChatBody', () => {
       ],
     }))) as { messages: { role: string; content: unknown }[] }
     expect(prepared.messages).toHaveLength(2)
-    expect(visible(prepared.messages[0]?.content as string)).toBe(`${WORKBUDDY_FALLBACK_SYSTEM_PROMPT}\n\n${prompt}`)
+    expect(prepared.messages[0]?.content).not.toContain(WORKBUDDY_FALLBACK_SYSTEM_PROMPT)
+    expect(visible(prepared.messages[0]?.content as string))
+      .toBe('You are an AI agent running inside DeepSeek Harness.\n\nSecond line.')
     expect(prepared.messages[1]?.content).toBe('hello')
   })
 
@@ -162,7 +164,9 @@ describe('prepareChatBody', () => {
       messages: [{ role: 'system', content: prompt }],
     }))) as { messages: { content: string }[] }
     expect(prepared.messages[0]?.content).not.toContain(WORKBUDDY_FALLBACK_SYSTEM_PROMPT)
-    expect(visible(prepared.messages[0]?.content ?? '')).toBe(prompt)
+    // The sentence rewrite still removes the mid-text phrase (issue #163).
+    expect(visible(prepared.messages[0]?.content ?? ''))
+      .toBe('Rules: be nice.\n\nYou are an AI agent running inside DeepSeek Harness.')
   })
 
   it('neutralizes every system message, not just the head', () => {

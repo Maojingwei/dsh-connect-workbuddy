@@ -461,7 +461,7 @@ export const en = {
   // counts CONSECUTIVE sends — because the switch is off by default and the
   // user's only other source for any of it is the config file.
   'row.channelRejectContinueLabel': 'Resend 「继续」 after the gateway refuses the request',
-  'row.channelRejectContinueHint': 'When the gateway answers 400 with code 11128 (「被网关的渠道校验拦截」), the turn just fails: the plugin never retries it in place and never swaps accounts, because the gate matches the message openings and every account sends the same ones. Sending it again as a NEW turn is the manual remedy, and it can pass because the request is rebuilt. This does that automatically, sending the text below. It spends a real request each time. Stops after N CONSECUTIVE sends — one successful turn, or one message you type yourself, resets the count. Subagent sessions are never touched. Off by default. Takes effect immediately, no reload.',
+  'row.channelRejectContinueHint': 'LAST RESORT, not a fix for 11128. When the gateway answers 400 with code 11128 (「被网关的渠道校验拦截」), the turn just fails: the plugin never retries it in place and never swaps accounts, because the gate matches the message contents and every account sends the same ones. Fixed system fingerprints are byte-identical every turn, so resending only pays for the same 400 again; since 5.13.1 `prepareChatBody` rewrites known phrases instead. The narrow case this can help is content that changes between turns. It sends the text below as a NEW turn and spends a real request each time. Stops after N CONSECUTIVE sends (default 1); one successful turn, or one message you type yourself, resets the count. Subagent sessions are never touched. Off by default. Takes effect immediately, no reload.',
   'row.channelRejectContinueLimit': 'Max consecutive sends:',
   'row.channelRejectContinueText': 'Text sent:',
   'row.cliBridgeLabel': 'Let the local CodeBuddy CLI do the work',
@@ -1007,7 +1007,7 @@ export const zh: Record<WorkBuddySettingsKey, string> = {
   // 真实请求、上限数的是**连续**次数——因为开关默认关闭，而用户了解这些的唯一
   // 其他途径就是配置文件。
   'row.channelRejectContinueLabel': '被网关渠道校验拦截后，自动再发一次「继续」',
-  'row.channelRejectContinueHint': '上游用 400 + code 11128（「被网关的渠道校验拦截」）拒绝时，这一轮就直接失败了：插件不会在原地重试，也不会换号——网关匹配的是消息的开头，每个账号发出去的开头都一样。手动「把这条消息再发一次」才是有效的办法，因为那会重新组装一份请求；这个开关就是把它自动化，发送下面这句文本。每次都会真实消耗一次请求。连续发送 N 次后停止：中间只要成功过一轮，或你自己发了一条消息，计数立刻清零。子代理会话一律不碰。默认关闭。改完立即生效，不必重载插件。',
+  'row.channelRejectContinueHint': '最后兜底，不是 11128 的修复。上游用 400 + code 11128（「被网关的渠道校验拦截」）拒绝时，这一轮就直接失败了：插件不会在原地重试，也不会换号——网关匹配的是消息内容，每个账号发出去都一样。固定 system 指纹每一轮逐字节相同，重发只会再付一次同一个 400；5.13.1 起由 `prepareChatBody` 按句改词处理。只有被拒内容刚好随轮次变化的窄情况才可能靠新回合碰过去。它会把下面这句作为新回合发出，每次真实消耗一次请求；默认只发 1 次、默认关闭；连续计数，成功一轮或你自己发一条消息即清零。子代理会话一律不碰，改完立即生效，不必重载插件。',
   'row.channelRejectContinueLimit': '连续发送上限：',
   'row.channelRejectContinueText': '发送的文本：',
   'row.cliBridgeLabel': '允许调用本机 CodeBuddy CLI 干活',

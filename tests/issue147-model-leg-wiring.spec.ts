@@ -16,7 +16,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest'
-import { WORKBUDDY_MODEL_IDENTITY, WORKBUDDY_PROVIDER } from '../src/adapter.ts'
+import { HOST_FOREIGN_API, WORKBUDDY_MODEL_IDENTITY, WORKBUDDY_PROVIDER } from '../src/adapter.ts'
 
 /** Contexts the api actually received; the assertions are about what it was HANDED. */
 const received: unknown[] = []
@@ -49,6 +49,30 @@ function previousModelTurn(): Record<string, unknown> {
   }
 }
 
+/**
+ * A turn from ANOTHER provider, exactly as the host rebuilds it after a switch:
+ * `api: dsh-foreign`, the other route id, and an unsigned thinking block.
+ *
+ * This is the surface issue #163's provider-switch scene exposed: pi-ai would
+ * flatten the thinking block into visible assistant prose, which the WorkBuddy
+ * gateway then refuses with 11128.
+ */
+function crossProviderTurn(): Record<string, unknown> {
+  return {
+    role: 'assistant',
+    api: HOST_FOREIGN_API,
+    provider: 'dsh-opencode-go',
+    model: 'deepseek-v4.1-flash',
+    content: [
+      { type: 'thinking', thinking: 'FOREIGN-PRIVATE-NOTES' },
+      { type: 'text', text: 'the foreign answer' },
+    ],
+    usage: { input: 1, output: 1 },
+    stopReason: 'stop',
+    timestamp: 1,
+  }
+}
+
 /** Block types of the assistant turns the api was handed. */
 function assistantBlockTypes(context: unknown): string[][] {
   const messages = (context as { messages: Array<{ role: string, content: Array<{ type: string }> }> }).messages
@@ -60,7 +84,7 @@ function assistantBlockTypes(context: unknown): string[][] {
 async function streamThrough(
   generation: 'legacy' | 'modern',
   entry: 'stream' | 'streamSimple',
-  options: { enabled?: boolean, requestModelId?: string } = {},
+  options: { enabled?: boolean, requestModelId?: string, message?: Record<string, unknown> } = {},
 ): Promise<{ seen: unknown, reported: unknown[] }> {
   received.length = 0
   const reported: unknown[] = []
@@ -94,7 +118,7 @@ async function streamThrough(
     {
       messages: [
         { role: 'user', content: 'continue', timestamp: 0 },
-        previousModelTurn(),
+        options.message ?? previousModelTurn(),
       ],
     },
     { apiKey: 'k' },
@@ -130,5 +154,18 @@ describe.each(['legacy', 'modern'] as const)('the %s branch passes the request m
     const { seen, reported } = await streamThrough(generation, entry, { enabled: false })
     expect(assistantBlockTypes(seen)).toEqual([['thinking', 'text']])
     expect(reported).toHaveLength(0)
+  })
+
+  it.each(['stream', 'streamSimple'] as const)('%s drops a cross-provider turn even with the switch off', async entry => {
+    // Issue #163's provider-switch scene. A `dsh-foreign` turn's thinking block
+    // has no signature and can never be replayed; pi-ai would flatten it to
+    // assistant prose, which the WorkBuddy gateway refuses with 11128. This is
+    // a correctness repair, so it must not wait for the same-route opt-in.
+    const { seen, reported } = await streamThrough(generation, entry, {
+      enabled: false,
+      message: crossProviderTurn(),
+    })
+    expect(assistantBlockTypes(seen)).toEqual([['text']])
+    expect(reported).toHaveLength(1)
   })
 })

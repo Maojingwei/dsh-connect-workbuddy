@@ -140,11 +140,13 @@ describe('prepareChatBody breaks the clause on every request, before any rescue'
     expect(spanSurvives(wire, SPANS[2] as string)).toBe(false)
   })
 
-  it('still prepends the neutral head for a PREFIX-listed opening', () => {
-    // Both defences run, in order: head first (so the prefix rule still sees the
-    // host's opening), then the clause breaks underneath it.
+  it('rewrites a PREFIX-listed opening before any head is added', () => {
+    // Since issue #163 the request path rewrites the measured identity, so the
+    // prefix head is no longer needed for this one: the gateway sees a
+    // different first sentence instead of a head in front of the old one.
     const wire = preparedSystem(SPANS[0] as string)
-    expect(wire.startsWith(`${WORKBUDDY_FALLBACK_SYSTEM_PROMPT}\n\n`)).toBe(true)
+    expect(wire.startsWith(`${WORKBUDDY_FALLBACK_SYSTEM_PROMPT}\n\n`)).toBe(false)
+    expect(wire).toContain('You are an AI agent running inside DeepSeek Harness.')
     expect(spanSurvives(wire, SPANS[0] as string)).toBe(false)
   })
 
@@ -217,19 +219,18 @@ describe('the perturbation rules stay idempotent WITHOUT the coarse ZWS guard', 
   it('dense does not double-insert on text the request path already broke', () => {
     // THE risk the coarse-guard removal creates, on the rung that runs LAST. The
     // ladder feeds dense the output of `forceNeutralHead(prepared)` — text that
-    // `prepareChatBody` already gave clause breaks. With the old
-    // `includes(U+200B)` guard gone, dense must still respect the breaks that
-    // are already there instead of stacking a second one at each position.
+    // `prepareChatBody` now REWRITES the coding-agent phrase (issue #163), so
+    // there may be no invisible break in the request path at all. Dense still
+    // must not stack a second break at any position it does touch.
     const prepared = prepareChatBody(JSON.stringify({
       model: 'm',
       messages: [{ role: 'system', content: SPANS[1] as string }, { role: 'user', content: 'hi' }],
     }))
-    // The request path already broke the clause.
     const sysOf = (b: string): string =>
       (JSON.parse(b) as { messages: { content: string }[] }).messages[0]!.content
     expect(spanSurvives(sysOf(prepared), SPANS[1] as string)).toBe(false)
-    const before = (sysOf(prepared).match(/\u200b/gu) ?? []).length
-    expect(before).toBeGreaterThan(0)
+    // The rewrite removed the phrase, so the request path added no ZWS here.
+    expect((sysOf(prepared).match(/\u200b/gu) ?? []).length).toBe(0)
 
     const dense = perturbChannelFingerprints(prepared, true) as string
     // Dense adds breaks between the remaining rune pairs, but never TWO at one

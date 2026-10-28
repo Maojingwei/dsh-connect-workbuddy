@@ -253,7 +253,7 @@ export function extraInjectedPrefixesOf(configured: unknown): string[] {
  * module is the browser half's node-free boundary (`src/index.ts` pulls in the
  * whole provider stack), and the two values must agree, which a test pins.
  */
-const CHANNEL_CONTINUE_DEFAULTS = { enabled: false, maxConsecutive: 3, text: '继续' } as const
+const CHANNEL_CONTINUE_DEFAULTS = { enabled: false, maxConsecutive: 1, text: '继续' } as const
 
 /**
  * Read the `channelRejectContinue` block out of a settings snapshot.

@@ -639,12 +639,13 @@ export interface Config {
    *
    * 这条失败**不换号也不重试**（`isFailoverWorthy` 刻意把它排除在外：网关匹配的
    * 是消息开头，换账号只会每个账号白烧一次请求），所以这一轮就此结束，用户看到的
-   * 是「本轮运行失败400: … 被网关的渠道校验拦截 …」。而新开一个回合会让宿主重新
-   * 组装 surface，确实可能通过 —— 这正是 `docs/PINNED-11128-RETRY.md` 里那条
-   * 「把这条消息再发一次」的手动做法。
+   * 是「本轮运行失败400: … 被网关的渠道校验拦截 …」。固定指纹由 `prepareChatBody`
+   * 的按句改词处理；这条开关只是**最后兜底**：只有被拒内容刚好随轮次变化的窄情况
+   * 才可能靠新回合碰过去。固定 system 指纹每轮相同，重发也救不了（#163 实测）。
    *
    * 默认关闭的理由与 {@link Config.usageIdentity} 相同：它会在用户没有发消息的
-   * 情况下花掉真实请求，属于必须显式授权的开销。上限按用户要求默认 3 次。
+   * 情况下花掉真实请求，属于必须显式授权的开销。上限默认 1 次：1 次救不了，3 次也
+   * 救不了，旧默认 3 只会把同一个 400 付三遍。
    */
   channelRejectContinue?: {
     /**
@@ -652,7 +653,7 @@ export interface Config {
      */
     enabled?: boolean
     /**
-     * 连续自动续发的次数上限（默认 3，夹在 1..10）。
+     * 连续自动续发的次数上限（默认 1，夹在 1..10）。
      *
      * 「连续」是关键：一次成功回合、或者用户自己发了一条消息，计数立刻清零。
      * 所以上限拦的是「一直过不去就一直试」，而不是这个会话一生的总次数。
@@ -944,11 +945,12 @@ export const Config: z<Config> = z.object({
     z.boolean()
       .default(false)
       .description('Drop foreign thinking blocks that pi-ai would publish as prose (issue #147). ' +
-        'After a provider switch the host rebuilds the other provider\'s assistant turns as dsh-foreign, ' +
-        'and pi-ai then rewrites their thinking blocks into visible text, so the model\'s working notes ' +
-        'become the answer and it copies that shape on later turns. On, those unsigned blocks are removed ' +
-        'from the request (they could never be replayed as reasoning anyway); text and tool calls are ' +
-        'untouched. Off by default because it changes bytes the upstream counts.'),
+        'CROSS-PROVIDER turns are dropped automatically: after a provider switch the other provider\'s ' +
+        'unsigned thinking blocks can never be replayed, and pi-ai would flatten them into assistant prose ' +
+        'that the gateway refuses with 11128 (issue #163\'s measured scene). This switch only widens the ' +
+        'repair to a model switch inside one of this bundle\'s own routes. On, those blocks are removed ' +
+        'from the request; text and tool calls are untouched. Off by default for the same-route leg ' +
+        'because it changes bytes the upstream counts.'),
   ) as unknown as z<boolean>,
   sessionTitle: asVolatile(
     z.object({
@@ -960,10 +962,10 @@ export const Config: z<Config> = z.object({
   channelRejectContinue: asVolatile(
     z.object({
       enabled: z.boolean().default(false),
-      maxConsecutive: z.number().step(1).min(1).max(10).default(3),
+      maxConsecutive: z.number().step(1).min(1).max(10).default(1),
       text: z.string().default('继续'),
     }).default({})
-      .description('After the gateway refuses a turn with `channel_reject` (business code 11128), send 「继续」 once more automatically — optional and capped. Off by default: it spends a real request without the user typing anything. That refusal is deliberately NOT retried in place and NOT failed over (every account sends the same opening), so the turn would otherwise just fail; a new turn rebuilds the request surface, which is the manual "send it again" remedy docs/PINNED-11128-RETRY.md already recommends. `maxConsecutive` (default 3) counts CONSECUTIVE auto-sends: one successful turn, or one real user message, resets it. Subagent sessions are never touched. Live: the engine reads this on every failure, so no reload is needed.'),
+      .description('LAST RESORT, not a fix for 11128. After the gateway refuses a turn with `channel_reject` (business code 11128), send 「继续」 once automatically. Off by default: it spends a real request without the user typing anything. Fixed system fingerprints are handled by prepareChatBody\'s sentence rewrites; they are byte-identical every turn, so resending only pays for the same 400 again. The narrow case this can help is content that changes between turns. `maxConsecutive` (default 1) counts CONSECUTIVE auto-sends: one successful turn, or one real user message, resets it. Subagent sessions are never touched. Live: the engine reads this on every failure, so no reload is needed.'),
   ) as unknown as z<{ enabled: boolean, maxConsecutive: number, text: string }>,
 }) as unknown as z<Config>
 
@@ -3431,6 +3433,16 @@ export function apply(ctx: Context, config: Config): void {
             dropForeignThinking: () => unwrapVolatile(current().dropForeignThinking) === true,
             onForeignThinking: blocks => {
               latestForeignThinking = { blocks, atMs: Date.now() }
+              // Cross-provider blocks are dropped even when the switch is off.
+              // Name that edit in the log: it changes bytes the upstream would
+              // otherwise count, and the user may be looking for the reason
+              // their transcript lost the other provider's working notes.
+              if (unwrapVolatile(current().dropForeignThinking) !== true) {
+                ctx.logger.warn(
+                  `dsh-connect-workbuddy: dropped ${blocks.length} cross-provider thinking block(s) `
+                  + 'before a WorkBuddy request (provider switch); see issue #163',
+                )
+              }
             },
           })
         }

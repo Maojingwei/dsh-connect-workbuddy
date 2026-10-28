@@ -1,5 +1,50 @@
 # Changelog
 
+## 5.13.1 (2026-10-29)
+
+### Bug Fixes
+
+- **按句改写网关固定指纹，落在 `neutralizeChannelFingerprints` 之前（#163，2026-10-29 实测）**
+  - **新测量**：CN 网关会在匹配前规范化 U+200B；system 开头插零宽仍 11128，`Note: ` 或真改词
+    才 200。`user` / `tool` 开头不扫（18:46 连测 3 次 200），所以不碰这两个角色。
+  - **第三处是整段组合指纹**：`@` 路径那 8 句逐句单独发 200，整段一起发 400。只改开头或整段
+    `replaceAll` 都不满足维护性要求；按句改才能既拆掉组合指纹，又覆盖宿主改一两个词的情况。
+  - **修法**：新增 `rewriteChannelFingerprintPhrases()` 与按句表（identity、coding agent、Web GUI、
+    `Agent Teams is available in this session`、`@` 路径整段逐句），在 `prepareChatBody()` 里
+    `keepPromptLast` 之后、`neutralizeChannelFingerprints` **之前**调用；只遍历 `system` /
+    `assistant` 的 string content 与 array text part，`user` / `tool`、工具调用、图片不动；无命中
+    逐字节不变，函数幂等。
+  - **测试**：新增 `tests/issue163-sentence-rewrite.spec.ts`（三处 span 消失、普通对话不变、
+    幂等、assistant 改写、array part、user/tool 不动、无命中 no-op）；同步更新 `issue98*` /
+    `upstream` / `identity-clause-break` 里旧的「中性头 + 原文」断言。`pnpm run check` 通过。
+
+- **自动「继续」降为最后兜底：默认 1 次，文案不再承诺有效（#163）**
+  - **证据**：固定 system 指纹每轮逐字节相同；同一 body 打上百次都是 400，只改三处才 200
+    （freedomx86 17:44）；现场 3 次自动续发、Windpixy 反复继续/新老会话、QIYU 三级救援全跑完
+    仍 400；appulsexi-maker 19:12 的零历史新会话、只有 system 一条，仍 11128。新回合换不掉
+    固定 system 内容，自动续发对这一族无效。
+  - **修法**：`DEFAULT_MAX_CONSECUTIVE` 与 schema / 客户端默认 3 → **1**；卡片、配置描述、
+    README 与 `docs/PINNED-11128-RETRY.md` 改为「最后兜底，不是 11128 的修复；固定指纹由按句
+    改词处理，只有随轮次变化的内容才可能靠它碰过」。
+  - 仍然默认关闭；每次仍真实消耗一次请求。`posture` 未变（只认 `channel_reject`、不换号、
+    不碰子代理、成功/真人消息清零）。
+
+- **换 provider 后，另一家的 thinking 不再被摊成 assistant 正文发给 WorkBuddy（#163 现场）**
+  - **现场**：`session-bb9396be` 在 02:03:43 从 `dsh-opencode-go/deepseek-v4.1-flash` 切到
+    `workbuddy/deepseek-v4.1-flash`，02:04:35 起连续 4 个回合 400/11128；错误里三条 assistant 的
+    14,410 / 4,225 / 5,138 字，逐字等于切换前 seq 98/109/114 的 reasoning 块。
+  - **机制**：宿主把另一家的 assistant 轮次重建为 `dsh-foreign`，pi-ai 把无签名的 thinking 块
+    改写成可见 `text`；WorkBuddy 网关扫描 assistant 消息，把它当成未授权渠道。`dropForeignThinking`
+    本来就是修这个的，但默认关闭，且卡片上没有开关。
+  - **修法**：`withLegacyContext` 在 `alignAssistantIdentities` 之后**无条件**丢弃**跨 provider** 的
+    foreign thinking（`api: dsh-foreign`，或 provider 不属于本 bundle 的两条路由）；同一路由内换
+    模型（`hy3` → `deepseek-v4.1-flash`）仍由 `dropForeignThinking` 显式开关控制。跨 provider 的
+    思考块没有签名、本来就不可能作为 reasoning 重放，丢弃不改变语义；文本与工具调用不动。
+  - **诊断**：自动丢弃时写一条 warn（仅在开关关闭时），`latestForeignThinking` 仍照旧上报。
+  - **测试**：`tests/issue147-foreign-thinking.spec.ts` 新增三条（跨 provider 选中、同路由模型
+    切换不选、global 路由对齐后不误伤）；`tests/issue147-model-leg-wiring.spec.ts` 新增两条（两个
+    generation × 两个入口的 `dsh-foreign` 回合在开关关闭时也被丢弃）。
+
 ## 5.13.0 (2026-10-28)
 
 > 用户贴的那条失败：`本轮运行失败400: {"message":"workbuddy 上游失败：被网关的渠道校验拦截（不是账号、

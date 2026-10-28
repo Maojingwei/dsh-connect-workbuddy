@@ -42,6 +42,7 @@ import { transformMessages } from '@earendil-works/pi-ai/api/transform-messages'
 import type { Context, Model, Api } from '@earendil-works/pi-ai'
 import {
   alignAssistantIdentities,
+  crossProviderThinkingOf,
   dropForeignThinking,
   foreignThinkingOf,
   HOST_FOREIGN_API,
@@ -168,6 +169,36 @@ describe('with the repair off the request is exactly what it was before', () => 
   it('a transcript with no foreign turn is returned as the same object', () => {
     const context = contextOf([ownTurn(WORKBUDDY_PROVIDER, 'ours')])
     expect(dropForeignThinking(context)).toBe(context)
+  })
+})
+
+describe('cross-provider turns are repaired automatically; same-route switches are not', () => {
+  it('selects a foreign turn and leaves this bundle\'s own turn alone', () => {
+    const context = contextOf([
+      foreignTurn('foreign notes'),
+      ownTurn(WORKBUDDY_PROVIDER, 'our own plan'),
+    ])
+    expect(crossProviderThinkingOf(context).map(block => block.messageIndex)).toEqual([0])
+  })
+
+  it('does not select a model switch on one of this bundle\'s own routes', () => {
+    // The turn WAS produced by this bundle; only the model id differs. That is
+    // the #147 model leg, which stays behind the explicit switch.
+    const message = ownTurn(WORKBUDDY_MODEL_IDENTITY, 'our own plan')
+    message['model'] = 'hy3'
+    const context = contextOf([message])
+    expect(foreignThinkingOf(context, WORKBUDDY_MODEL_IDENTITY, 'deepseek-v4.1-flash')).toHaveLength(1)
+    expect(crossProviderThinkingOf(context)).toHaveLength(0)
+  })
+
+  it('does not select an owned global-region turn after alignment', () => {
+    // The host stamps this turn `dsh-foreign` because it was recorded under the
+    // route id; alignment repairs it, so the automatic repair must not.
+    const message = ownTurn(WORKBUDDY_GLOBAL_PROVIDER, 'our own plan')
+    message['api'] = HOST_FOREIGN_API
+    delete (message['content'] as Array<Record<string, unknown>>)[0]!['thinkingSignature']
+    const aligned = alignAssistantIdentities(contextOf([message]))
+    expect(crossProviderThinkingOf(aligned)).toHaveLength(0)
   })
 })
 

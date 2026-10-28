@@ -243,14 +243,17 @@ describe('the self-healing retry (issue #98)', () => {
   })
 
   it('skips the head rung when it cannot change the body, and still tries the perturbation', async () => {
-    // A KNOWN fingerprint is already moved behind the neutral head by
-    // `prepareChatBody`, so `forceNeutralHead` returns undefined and the head
-    // rung is skipped — but the perturbation rung is exactly what rescues the
-    // inner-fingerprint case, so it must still run.
+    // The system already starts with the neutral head, and the request path
+    // rewrites the known fingerprint (issue #163), so `forceNeutralHead` cannot
+    // change the body and the head rung is skipped — but the perturbation rung
+    // is exactly what rescues an inner, unmeasured fingerprint, so it must run.
     const mounted = mount({ results: () => failure(400, CHANNEL_REJECT_BODY) })
     shim = mounted.instance
 
-    const reply = await chat(shim, [{ role: 'system', content: DSH_FINGERPRINT }, { role: 'user', content: 'hi' }])
+    const reply = await chat(shim, [
+      { role: 'system', content: `${WORKBUDDY_FALLBACK_SYSTEM_PROMPT}\n\n${DSH_FINGERPRINT}` },
+      { role: 'user', content: 'hi' },
+    ])
 
     expect(reply.status).toBe(400)
     expect(mounted.bodies).toHaveLength(3)

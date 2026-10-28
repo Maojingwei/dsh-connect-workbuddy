@@ -30,15 +30,16 @@
  *
  * - 只认 `channel_reject` 这一种失败。配额、限流、网络、内容审核都有各自的处置，
  *   那些失败再发「继续」只会多烧一次请求（`NO_CONTINUE_CODES` 的同一判断）。
- * - 上限默认 3 次，**连续**计数：一次成功回合或一条真实用户消息立即清零。计数在
- *   「发出」时递增，所以用户看到的自动续发次数恰好等于上限。
+ * - 上限默认 **1** 次，**连续**计数：一次成功回合或一条真实用户消息立即清零。
+ *   旧默认是 3；#163 的实测把「新回合会换掉被拒内容」证伪了（固定 system 指纹每轮
+ *   相同，3 次只是把同一个 400 付三遍），所以一次足够：1 次救不了，3 次也救不了。
  * - 不做换号、不换区域、不改请求内容、不重试同一份字节：换号对这类拒绝无效，而
  *   篡改请求才是这条功能不该碰的东西。
  * - 子代理会话一律不碰：子代理由父代理驱动，抢跑会打乱执行树。
  *
- * 默认关闭（`channelRejectContinue` 默认 false）。它会在用户没有发消息的情况下
- * 花掉真实请求，属于「必须由用户显式授权」的那一类开关，与 `usageIdentity`、
- * `imageToolEnabled` 的同一条规则。
+ * 它是**最后兜底**，不是 11128 的修复：固定指纹由 `prepareChatBody` 的按句改词处理；
+ * 改词后仍 11128，多半是新的固定指纹，重发同样无效。只有「被拒内容刚好随轮次变化」
+ * 的窄情况才可能靠它碰过去，所以默认关闭、默认只发 1 次。
  *
  * 参考：`dsh-client-auto-continue`（MIT，HsiangNianian/dsh-auto-continue）—
  *   「连续失败上限」这套**语义**取自它：`state.consecutive` 在每次发出时自增、
@@ -73,8 +74,8 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
  */
 export const CONTINUE_SOURCE_KIND = 'workbuddy-continue'
 
-/** 默认自动续发的次数上限。用户要的「连续 3 次就停」就是它。 */
-export const DEFAULT_MAX_CONSECUTIVE = 3
+/** 默认自动续发的次数上限：1 次。见模块头：3 次在固定指纹上只是多付两遍。 */
+export const DEFAULT_MAX_CONSECUTIVE = 1
 
 /** 默认续发的文本。用户要的就是「继续」两个字。 */
 export const DEFAULT_CONTINUE_TEXT = '继续'

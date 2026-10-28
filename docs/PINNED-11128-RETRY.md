@@ -1,11 +1,14 @@
 # 【存档】这类 400（渠道校验 / 11128）：先重试
 
 > **本楼已从置顶撤下（2026-10-28，5.13.0 发布）。** 它讲的「手动再发一次」已经可以由插件自己做：
-> 开关 `channelRejectContinue.enabled` 打开后自动发「继续」，连续上限默认 3 次。见
-> [#162](https://github.com/dingminhua/dsh-connect-workbuddy/issues/162)。
-> 本楼保留为**存档**，价值在于 §2 的机制取证与 §4 的报告模板——关掉开关时，「手动再发一次」
-> 仍然是这个功能关闭下的正确做法，也是它开启后仍然失败时的下一步。下文描述的正是那套手动做法；
-> 它做的事和插件自动做的事**是同一件**：开一个新回合，不是把被拒的字节原样重投。
+> 开关 `channelRejectContinue.enabled` 打开后自动发「继续」，但 5.13.1 起默认只发 **1** 次，且它
+> 只是**最后兜底**，不是 11128 的修复。见 [#162](https://github.com/dingminhua/dsh-connect-workbuddy/issues/162)。
+>
+> **2026-10-29 的重要更正（#163）**：固定 system 指纹（identity / Web GUI / @ 路径 800 字整段）每一轮
+> 逐字节相同，新回合不会把它换掉；同一份 body 打上百次都是 400，只改三处短语才 200。所以「手动/自动
+> 再发一次」对这一族**无效**。5.13.1 起由 `prepareChatBody` 的按句改词处理；改词后仍 11128，多半是
+> 新的固定指纹，重发同样无效。本楼 §2 ③(a) 的「轮次变了 body 也变了」只适用于**随轮次变化**的窄情况，
+> 不能解释固定 system 段。下文保留为机制取证与报告模板；**先升级/改词，不要先重发**。
 >
 > 分类总表、实测事实、报告模板在 [#125](https://github.com/dingminhua/dsh-connect-workbuddy/issues/125)。
 > 新证据请按 §4 的模板发到 [#162](https://github.com/dingminhua/dsh-connect-workbuddy/issues/162) 或 [#125](https://github.com/dingminhua/dsh-connect-workbuddy/issues/125) §3。
@@ -15,7 +18,7 @@
 | | |
 |---|---|
 | **是哪一类** | `http 400` + `code 11128` + `"type":"channel_reject"`，文案里点名「渠道校验」 |
-| **先做什么** | 把刚才那条消息**原样再发一次**（不是换账号、不是重开新会话） |
+| **先做什么** | **先升级到含按句改词的 5.13.1**（固定 system 指纹重发无效）；只有在改词层没命中、且怀疑内容随轮次变化时，才考虑手动再发一次 |
 | **宿主会替你重试吗** | **不会**。这类 400 不在 DSH 的原地重试集里——`KIND_HOST_CODE` 只把 `soft_rate` 译成宿主认得的码，其余保持 `type` 原样（`src/shim.ts:379`、`:373` 的注释说明了这条规则：渠道门的判决对给定的提示词是**确定**的，原地重投同一份字节只会白烧预算）。所以「重试」这个动作必须由你按下发送 |
 | **别在这些上面花时间** | 换账号、换区域、重装 WorkBuddy 官方客户端、改 UA、清缓存重登。门读的是**这**一份请求的内容，与账号/积分/额度/网络都无关（[#125](https://github.com/dingminhua/dsh-connect-workbuddy/issues/125) §4 有实测记录，[#87–#98](https://github.com/dingminhua/dsh-connect-workbuddy/issues/98) 的报告者就是在这上面花了时间） |
 

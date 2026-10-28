@@ -169,8 +169,8 @@ describe('the settings the schema hands over', () => {
     expect(channelContinueSettingsOf(true, 3, '继续').enabled).toBe(true)
   })
 
-  it('defaults the cap to 3 and clamps whatever it is given', () => {
-    expect(channelContinueSettingsOf(true, undefined, undefined).maxConsecutive).toBe(3)
+  it('defaults the cap to 1 and clamps whatever it is given', () => {
+    expect(channelContinueSettingsOf(true, undefined, undefined).maxConsecutive).toBe(1)
     expect(channelContinueSettingsOf(true, 5, undefined).maxConsecutive).toBe(5)
     // 0 would make the feature a silent no-op, which is worse than off.
     expect(channelContinueSettingsOf(true, 0, undefined).maxConsecutive).toBe(1)
@@ -178,7 +178,7 @@ describe('the settings the schema hands over', () => {
     // A cap that never stops is a loop; the schema ceiling is 10.
     expect(channelContinueSettingsOf(true, 999, undefined).maxConsecutive).toBe(10)
     expect(channelContinueSettingsOf(true, 2.7, undefined).maxConsecutive).toBe(2)
-    expect(channelContinueSettingsOf(true, Number.NaN, undefined).maxConsecutive).toBe(3)
+    expect(channelContinueSettingsOf(true, Number.NaN, undefined).maxConsecutive).toBe(1)
   })
 
   it('falls back to 「继续」 for a blank text instead of sending an empty turn', () => {
@@ -190,8 +190,8 @@ describe('the settings the schema hands over', () => {
 })
 
 describe('the consecutive cap — the user explicit requirement', () => {
-  it('sends 继续 exactly three times, then stops', async () => {
-    const { engine, agents } = build()
+  it('sends 继续 exactly three times when the user sets the cap to 3, then stops', async () => {
+    const { engine, agents } = build({ maxConsecutive: 3 })
     const agent = fakeAgent()
     agents.set('s1', agent)
 
@@ -217,7 +217,7 @@ describe('the consecutive cap — the user explicit requirement', () => {
   })
 
   it('resets the count after one successful turn', async () => {
-    const { engine, agents } = build()
+    const { engine, agents } = build({ maxConsecutive: 3 })
     const agent = fakeAgent()
     agents.set('s1', agent)
 

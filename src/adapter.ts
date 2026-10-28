@@ -223,12 +223,21 @@ export interface WorkBuddyAdapterOptions {
    */
   piAiGeneration?: PiAiGeneration
   /**
-   * Drop foreign thinking blocks pi-ai would publish as prose (issue #147).
+   * Drop SAME-ROUTE foreign thinking blocks pi-ai would publish as prose
+   * (issue #147).
    *
-   * OFF by default, and read LIVE (a getter, not a boolean) so the switch takes
-   * effect on the next request without reloading the plugin: turning it on
-   * mid-session is the whole point — the user sees the working-notes turn,
-   * flips the switch, and the next turn is answered normally.
+   * CROSS-PROVIDER turns are dropped unconditionally: after a provider switch
+   * the host rebuilds the other provider's assistant turns as `dsh-foreign`,
+   * their unsigned thinking blocks can never be replayed, and pi-ai would
+   * otherwise flatten them into assistant prose that the WorkBuddy gateway
+   * refuses with 11128 (issue #163's measured scene). This switch only widens
+   * the repair to a model switch INSIDE one of this bundle's own routes.
+   *
+   * OFF by default for that same-route leg, and read LIVE (a getter, not a
+   * boolean) so the switch takes effect on the next request without reloading
+   * the plugin: turning it on mid-session is the whole point — the user sees
+   * the working-notes turn, flips the switch, and the next turn is answered
+   * normally.
    */
   dropForeignThinking?: () => boolean
   /**
@@ -807,6 +816,48 @@ function isForeignAssistant(
 }
 
 /**
+ * Whether this assistant turn came from a DIFFERENT PROVIDER/route, rather than
+ * from a different model on one of this bundle's own routes.
+ *
+ * WHY THIS DISTINCTION EXISTS (issue #163's live scene). A session switched
+ * from `dsh-opencode-go` to a WorkBuddy route mid-turn. The host rebuilt the
+ * other provider's assistant turns as `dsh-foreign`, and pi-ai rewrote their
+ * unsigned `thinking` blocks into visible `text` — 14,410 / 4,225 / 5,138
+ * characters in the measured scene. WorkBuddy's gateway scans every assistant
+ * message and refused the turn with business code 11128; all three in-place
+ * rescue rungs and three auto-`继续` attempts failed because the bytes never
+ * changed.
+ *
+ * A cross-provider thinking block is different from a same-route model switch:
+ * it carries no `thinkingSignature` (the host builds `foreignAssistant()`
+ * without one), so it could never be replayed as reasoning. Its only possible
+ * contribution to the wire is the prose pi-ai manufactures from it. Dropping it
+ * is therefore a correctness repair, not a preference — and it must happen
+ * even when the user never opted into {@link dropForeignThinking}.
+ *
+ * Same-route model switches (`hy3` → `deepseek-v4.1-flash`) stay behind the
+ * explicit switch, because those turns WERE produced by this bundle and their
+ * reasoning may be worth keeping in the transcript for the user to read.
+ */
+function isCrossProviderAssistant(
+  message: unknown,
+  identity: string,
+  ownedRoutes: readonly string[],
+): boolean {
+  if (typeof message !== 'object' || message === null) return false
+  const record = message as Record<string, unknown>
+  if (record['role'] !== 'assistant') return false
+  // The host's fallback marker is the strongest signal: `foreignAssistant()`
+  // sets it for a turn this adapter did not produce. After
+  // `alignAssistantIdentities`, a turn this bundle owns has had the marker
+  // repaired away, so a remaining marker means genuinely foreign.
+  if (record['api'] === HOST_FOREIGN_API) return true
+  const provider = record['provider']
+  if (typeof provider !== 'string') return true
+  return provider !== identity && !ownedRoutes.includes(provider)
+}
+
+/**
  * Every foreign thinking block pi-ai would turn into visible prose (issue #147).
  *
  * THE DEFECT. pi-ai keeps a historical `thinking` block only while
@@ -870,6 +921,31 @@ export function foreignThinkingOf(
 }
 
 /**
+ * The subset of {@link foreignThinkingOf} that is safe to repair without asking.
+ *
+ * This is the predicate the adapter uses when `dropForeignThinking` is OFF: a
+ * turn from another provider/route is dropped unconditionally, because its
+ * unsigned thinking block can never be replayed and its flattened prose is what
+ * the WorkBuddy gateway refuses (issue #163's provider-switch scene). A turn
+ * from this bundle under a different model id is NOT included — that one is
+ * still the explicit switch's business.
+ *
+ * Runs after `alignAssistantIdentities`, so a global-region turn this bundle
+ * owns has already had its `dsh-foreign` marker repaired away and is not
+ * misclassified.
+ */
+export function crossProviderThinkingOf(
+  context: Context,
+  identity: string = WORKBUDDY_MODEL_IDENTITY,
+  ownedRoutes: readonly string[] = [WORKBUDDY_PROVIDER, WORKBUDDY_GLOBAL_PROVIDER],
+): ForeignThinkingBlock[] {
+  const messages = (context as { messages?: unknown }).messages
+  if (!Array.isArray(messages)) return []
+  return foreignThinkingOf(context, identity).filter(block =>
+    isCrossProviderAssistant(messages[block.messageIndex], identity, ownedRoutes))
+}
+
+/**
  * Remove the foreign thinking blocks {@link foreignThinkingOf} finds.
  *
  * WHY REMOVAL IS THE HONEST REPAIR. The alternatives are both worse:
@@ -905,7 +981,11 @@ export function dropForeignThinking(
   identity: string = WORKBUDDY_MODEL_IDENTITY,
   requestModelId?: string,
 ): Context {
-  const affected = foreignThinkingOf(context, identity, requestModelId)
+  return dropThinkingBlocks(context, foreignThinkingOf(context, identity, requestModelId))
+}
+
+/** Remove exactly the listed blocks; the one place that edits a transcript. */
+function dropThinkingBlocks(context: Context, affected: readonly ForeignThinkingBlock[]): Context {
   if (affected.length === 0) return context
   const messages = (context as unknown as { messages: unknown[] }).messages
   // Group by message first: each message is copied at most once, and a message
@@ -935,8 +1015,13 @@ export function dropForeignThinking(
  */
 export interface TranscriptRepairOptions {
   /**
-   * Drop foreign thinking blocks pi-ai would publish as prose (issue #147).
-   * `false` keeps the previous behaviour, byte for byte.
+   * Drop SAME-ROUTE foreign thinking blocks pi-ai would publish as prose
+   * (issue #147). `false` keeps the previous behaviour for a model switch
+   * inside one route.
+   *
+   * Cross-provider turns are repaired regardless of this switch (issue #163's
+   * provider-switch scene): their unsigned thinking blocks can never be
+   * replayed, and their flattened prose is what the gateway refuses.
    */
   dropForeignThinking?: boolean
   /**
@@ -962,19 +1047,28 @@ function withLegacyContext(
     // identity to decide what is foreign, so running it first would classify a
     // turn this plugin OWNS (route id still unaligned) as foreign and delete its
     // reasoning — issue #102's regression, from the other direction.
-    if (repair?.dropForeignThinking !== true) return aligned
+    //
+    // ISSUE #163: a CROSS-PROVIDER turn is repaired even when the switch is
+    // off. Its thinking block has no signature and can never be replayed, and
+    // pi-ai would otherwise flatten it into assistant prose — which is the
+    // content the WorkBuddy gateway refused in the measured provider-switch
+    // scene. The switch only widens this to a same-route model switch, whose
+    // turn this bundle did produce.
+    //
     // `requestModelId` is pi-ai's third predicate leg. Without it a switch
     // BETWEEN MODELS inside one region (`hy3` → `deepseek-v4.1-flash`, both on
     // this route) degraded exactly like a cross-provider switch, while this
     // repair saw nothing to do: provider and api both still matched.
-    const affected = foreignThinkingOf(aligned, identity, requestModelId)
+    const affected = repair?.dropForeignThinking === true
+      ? foreignThinkingOf(aligned, identity, requestModelId)
+      : crossProviderThinkingOf(aligned, identity, ownedRoutes)
     if (affected.length === 0) return aligned
     try {
-      repair.onForeignThinking?.(affected)
+      repair?.onForeignThinking?.(affected)
     } catch {
       // A diagnostic must never fail a chat request.
     }
-    return dropForeignThinking(aligned, identity, requestModelId)
+    return dropThinkingBlocks(aligned, affected)
   }
   if (generation === 'modern') {
     return {
