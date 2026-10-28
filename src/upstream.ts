@@ -2194,6 +2194,68 @@ const ZERO_WIDTH_SPACE = '\u200b'
  */
 const WORD_INTERNAL_BREAK = /([A-Z][A-Za-z0-9]*)(\s+)(?=[A-Z][A-Za-z0-9])/gu
 
+/** A rune the dense rescue treats as a word character. */
+const DENSE_WORD_RUNE = /[A-Za-z0-9぀-ヿ㐀-鿿]/u
+
+/**
+ * Space U+200B through each run of non-space runes, when that run starts with a
+ * word rune.
+ *
+ * THE ONE-PASS FORM OF THE DENSE RULE (issue #159). The rule only ever consults
+ * two local facts — the first rune of the CURRENT run of non-space runes, and
+ * whether the rune immediately before this position is already a break — so it
+ * needs one accumulator and no prefix slicing, which is what makes it linear
+ * rather than quadratic. See the body for why the reference is the run's FIRST
+ * rune rather than the previous one, and for the exact old expression it
+ * reproduces.
+ *
+ * It is kept as a standalone function so its output can be compared against a
+ * literal transcription of the old `replace` in the test suite: the rewrite is
+ * a performance change only, and a byte-difference would mean the rescue sends
+ * a body nobody measured.
+ */
+function spaceDenseBreaks(text: string): string {
+  // The old rule was a `replace` over `/(?=\S)/gu` whose callback asked, for the
+  // position `offset`, whether the "nearest preceding non-space rune" exists and
+  // is a word rune — via `source.slice(0, offset).match(/\S(?=\S*$)/u)`. That
+  // lookahead demands EVERY rune after the match be non-space, so a match only
+  // exists when the prefix ends inside a run of non-space runes, and the rune it
+  // returns is the FIRST rune of that run (not the last one). The rule is:
+  //
+  //   at a non-space rune, insert U+200B when that run starts with a word rune
+  //   and neither this rune nor the one before it is already U+200B.
+  //
+  // Reproduced with one accumulator instead of a per-position prefix slice, which
+  // is what turns the old O(n²) into O(n). The OUTPUT IS BYTE-IDENTICAL, quirks
+  // included — notably that a run beginning with a non-word rune gets no breaks
+  // at all — because a difference here would send a body nobody measured.
+  const runes = Array.from(text)
+  let out = ''
+  /** First rune of the current run of non-space runes; `undefined` outside one. */
+  let runStart: string | undefined
+  for (let index = 0; index < runes.length; index += 1) {
+    const rune = runes[index] as string
+    if (/^\s$/u.test(rune)) {
+      runStart = undefined
+      out += rune
+      continue
+    }
+    runStart ??= rune
+    // "There IS a preceding non-space rune" is the whole first half of the old
+    // predicate: outside a run (i.e. after a space) the regex found no match, so
+    // no break lands on the first rune of a word. `runStart` is the rune that
+    // match returned, not the one before this position.
+    const inRun = index > 0 && !/^\s$/u.test(runes[index - 1] as string)
+    const before = runes[index - 1]
+    if (inRun && runStart !== ZERO_WIDTH_SPACE && DENSE_WORD_RUNE.test(runStart)
+      && rune !== ZERO_WIDTH_SPACE && before !== ZERO_WIDTH_SPACE) {
+      out += ZERO_WIDTH_SPACE
+    }
+    out += rune
+  }
+  return out
+}
+
 /**
  * A body whose scanned message TEXT is perturbed just enough to break an exact
  * content fingerprint.
@@ -2283,19 +2345,34 @@ export function perturbChannelFingerprints(
     // untouched to keep the body close to what the model and the gateway already
     // saw; whitespace is likewise left alone so the model's tokenizer sees no
     // new word splits.
-    const denseText = boundaries.replace(
-      /(?=\S)/gu,
-      (whole: string, offset: number, source: string) => {
-        // The zero-width space inserted by the sparse rules is invisible, but
-        // it is still a rune in the source; it must not delete the sparse break
-        // that the lookahead can otherwise see through.
-        if (source.slice(Math.max(0, offset - 1), offset + 1).includes(ZERO_WIDTH_SPACE)) return ''
-        const previous = source.slice(0, offset).match(/\S(?=\S*$)/u)?.[0]
-        return previous !== undefined && /[A-Za-z0-9぀-ヿ㐀-鿿]/u.test(previous)
-          ? ZERO_WIDTH_SPACE
-          : ''
-      },
-    )
+    // THE INSERTION POSITIONS ARE FOUND IN ONE PASS (issue #159, measured).
+    //
+    // This used to be a `replace` whose callback re-derived "the previous
+    // non-space rune" by slicing the whole prefix and running a regex on it:
+    // `source.slice(0, offset).match(/\S(?=\S*$)/u)`. That is O(offset) work
+    // for every one of the O(n) match positions, i.e. O(n²) in the body size —
+    // and a rescue rung that is only reached on a body the gateway has already
+    // refused twice, which is exactly a big real session. Measured on this
+    // machine (Node 25, 2026-10-28) before the change:
+    //
+    //   body 11,575 chars →  1.3 s      46,075 → 22.8 s
+    //   body 23,075 chars →  5.2 s      92,075 → 82.7 s
+    //                                   184,075 → 322.8 s
+    //
+    // The field reports in issue #159 carry a 130,345-character `system`
+    // message, so this rung needed minutes of SYNCHRONOUS CPU before it produced
+    // a body — and it runs before the request is sent, on a turn the reader is
+    // already waiting for after two refusals. From outside, a rescue that is
+    // still computing its own body and a rescue that never ran look the same,
+    // which is one ordinary explanation for what #159 observed. The one-pass
+    // form below is byte-identical (pinned against a literal transcription of
+    // the old expression) and measured at single-digit milliseconds.
+    //
+    // The rule itself is unchanged, including its quirks: a break goes before a
+    // non-space rune when the run it belongs to STARTS with a word rune and
+    // neither this rune nor the one before it is already U+200B. See
+    // `spaceDenseBreaks`, which carries the derivation.
+    const denseText = spaceDenseBreaks(boundaries)
     return denseText === text ? undefined : denseText
   }
   for (const value of messages) {
