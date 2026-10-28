@@ -1,13 +1,14 @@
-# 【置顶】这类 400（渠道校验 / 11128）：先重试
+# 【存档】这类 400（渠道校验 / 11128）：先重试
 
-> 长期置顶，**只讲一件事**：看到 `被网关的渠道校验拦截（不是账号、额度或网络问题）`，先做的是**把这条消息再发一次**。
-> 分类总表、实测事实、报告模板在 [#125](https://github.com/dingminhua/dsh-connect-workbuddy/issues/125)，本楼是它前面那一层「先做这个」。
-> 每次发版后更新主楼；新证据请按 §4 的模板发到本楼或 [#125](https://github.com/dingminhua/dsh-connect-workbuddy/issues/125) §3。
+> **本楼已从置顶撤下（2026-10-28，5.13.0 发布）。** 它讲的「手动再发一次」已经可以由插件自己做：
+> 开关 `channelRejectContinue.enabled` 打开后自动发「继续」，连续上限默认 3 次。见
+> [#162](https://github.com/dingminhua/dsh-connect-workbuddy/issues/162)。
+> 本楼保留为**存档**，价值在于 §2 的机制取证与 §4 的报告模板——关掉开关时，「手动再发一次」
+> 仍然是这个功能关闭下的正确做法，也是它开启后仍然失败时的下一步。下文描述的正是那套手动做法；
+> 它做的事和插件自动做的事**是同一件**：开一个新回合，不是把被拒的字节原样重投。
 >
-> **5.13.0 起，这一步可以交给插件做**：`channelRejectContinue.enabled` 打开后，插件在这一类失败上
-> 自动把「继续」发一次（连续上限默认 3 次，一次成功回合或你自己发的消息就清零）。它做的是**同一件事**
-> ——开一个新回合，不是把被拒的字节原样重投。默认关闭，因为每次都会真实消耗一次请求。
-> 下文描述的「手动再发一次」仍然是这个功能关闭时的正确做法，也是它开启后仍然会失败时的下一步。
+> 分类总表、实测事实、报告模板在 [#125](https://github.com/dingminhua/dsh-connect-workbuddy/issues/125)。
+> 新证据请按 §4 的模板发到 [#162](https://github.com/dingminhua/dsh-connect-workbuddy/issues/162) 或 [#125](https://github.com/dingminhua/dsh-connect-workbuddy/issues/125) §3。
 
 ## 0. 一句话
 
