@@ -26,7 +26,7 @@
   - **修法**：`DEFAULT_MAX_CONSECUTIVE` 与 schema / 客户端默认 3 → **1**；卡片、配置描述、
     README 与 `docs/PINNED-11128-RETRY.md` 改为「最后兜底，不是 11128 的修复；固定指纹由按句
     改词处理，只有随轮次变化的内容才可能靠它碰过」。
-  - 仍然默认关闭；每次仍真实消耗一次请求。`posture` 未变（只认 `channel_reject`、不换号、
+  - 仍然默认关闭；每次仍真实消耗一次请求。**行为面**未变（只认 `channel_reject`、不换号、
     不碰子代理、成功/真人消息清零）。
 
 - **换 provider 后，另一家的 thinking 不再被摊成 assistant 正文发给 WorkBuddy（#163 现场）**
