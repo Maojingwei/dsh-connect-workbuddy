@@ -458,12 +458,14 @@ else { await envelope.response.text() /* or consume it as SSE */ }
 
 ## Marketplace listing
 
-The plugin ships an installable `dsh.bundle` manifest and is published to npm. Community marketplaces generally sync entries from the [Awesome DSH Plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) registry; the submission draft lives at [`awesome-dsh-plugin-submission/dingminhua__dsh-connect-workbuddy.yml`](awesome-dsh-plugin-submission/dingminhua__dsh-connect-workbuddy.yml), and the formal submission is PR [#3812](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/3812) (`data/plugins/dingminhua__dsh-connect-workbuddy.yml`, CI and Submission gate green, awaiting maintainer merge).
+The plugin ships an installable `dsh.bundle` manifest and is published to npm. Community marketplaces generally sync entries from the [Awesome DSH Plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) registry; the local mirror of the entry lives at [`awesome-dsh-plugin-submission/dingminhua__dsh-connect-workbuddy.yml`](awesome-dsh-plugin-submission/dingminhua__dsh-connect-workbuddy.yml). **The entry was merged and listed via PR [#3812](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/3812) (2026-08-30).**
+
+> ⚠️ **A merged entry does not update itself.** #3812 was merged when the plugin was at 2.0.15, so the registry line kept describing that release: no CN/international dual providers, no per-refresh credit multipliers, no account pool with failover, and nothing saying check-in is **manual** (it claims a real reward and only runs on a button press). **Every meaningful capability change needs its own entry PR**; the registry review states plainly that a description is read as a claim and checked against the code. The current update is PR [#10281](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/10281).
 
 **Listing directory rules** (per [contributing.md](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md)):
 
 - One YAML per plugin: `data/plugins/<owner>__<repo>.yml` with `url` (exactly matching the repo), `name` (`owner/repo`), `category` (one of the valid values; this project uses `model`), and `description.en` (required, ending with a period) / `description.zh` (optional); a description containing `: ` must be quoted.
-- The repo must declare a `dsh.bundle` manifest (here `dsh.bundle.patch: ./cordis.patch.yml`) and carry the `dsh-plugin` topic; the ≥ 10 commits and ≥ 1 day age are checked automatically by CI.
+- The repo must declare a `dsh.bundle` manifest (here `dsh.bundle.patch: ./cordis.patch.yml`) and carry the `dsh-plugin` topic — **declaring only `dsh.client` is the most common rejection**. The 1-day repo age is checked automatically by CI (there is **no commit-count bar**; that one was removed).
 - Both READMEs (`README.md` / `README.zh.md`) are generated — never edit by hand; after changing the YAML, regenerate with `node scripts/generate-readme.mjs`.
 - At most 3 entries per PR; change only your own entry, never touch other plugins.
 
@@ -471,7 +473,7 @@ Marketplace screenshots and GitHub README badges are two separate mechanisms:
 
 - **GitHub badges** are produced by the Shields/dshfind image links at the top of this README.
 - **Marketplace screenshots** follow the current convention and are declared in the plugin's own root [`screenshots.json`](screenshots.json) (this project declares its usage-card screenshot there). The registry's `data/screenshots.json` is a legacy fallback and **no longer accepts new keys** (this project removed its edit before submitting).
-- **Marketplace icons/placeholders** follow each marketplace's own display rules; they are not a generic npm `package.json` field nor a README badge.
+- **Marketplace icons** are declared with the entry's optional `icon:` field (this project points at `icons/dsh-connect-workbuddy-128.png`): it **must be a GitHub-hosted raster** (png/jpg/jpeg/webp) — SVG and third-party image hosts are refused — and storefronts fall back to the owner avatar when it is omitted. It is not a generic npm `package.json` field, nor a README badge.
 
 **The title and description on the plugin card are not rendered by this plugin** — they are **package metadata** the DSH plugin manager reads: it takes its words from `meta.title` / `meta.description` in `locale/<lang>.json` (`locale/en.json` is the anchor, so without it `zh.json` is never read; without the `"./locale/*.json"` wildcard in `exports` the whole directory is skipped **silently**), and falls back to `package.json`'s `description` for English. The same sentence therefore lives in three places in this repository, and [`tests/locale-meta.spec.ts`](tests/locale-meta.spec.ts) pins them together: the card dictionary (`locale/en.json` / `locale/zh.json`), the English fallback (`package.json.description`) and the listing draft (`description.en` / `description.zh` in `awesome-dsh-plugin-submission/dingminhua__dsh-connect-workbuddy.yml`). **Edit one, edit all three.**
 
