@@ -10,6 +10,11 @@
 > 新的固定指纹，重发同样无效。本楼 §2 ③(a) 的「轮次变了 body 也变了」只适用于**随轮次变化**的窄情况，
 > 不能解释固定 system 段。下文保留为机制取证与报告模板；**先升级/改词，不要先重发**。
 >
+> **一条长度口径（#164）**：5.13.1 的第 0 级改词会让 system **略微变长**（#164 实测 +32 字节 / 5 行）。
+> 自助对比正文长度时，那既不是「扰动后长度」也不是内容变多，只是同义改写换了词。报错里的「共 N 字」另含
+> 一个固定注入量（+11,349，见 [#162](https://github.com/dingminhua/dsh-connect-workbuddy/issues/162) §1），两个数字
+> 都不能直接和日志里的宿主原文比。
+>
 > 分类总表、实测事实、报告模板在 [#125](https://github.com/dingminhua/dsh-connect-workbuddy/issues/125)。
 > 新证据请按 §4 的模板发到 [#162](https://github.com/dingminhua/dsh-connect-workbuddy/issues/162) 或 [#125](https://github.com/dingminhua/dsh-connect-workbuddy/issues/125) §3。
 

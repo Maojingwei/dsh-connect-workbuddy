@@ -2019,6 +2019,17 @@ function scansOpening(role: unknown): boolean {
  * `from` strings are matched ANYWHERE, not just at an opening, because the
  * measured rule is position-independent. Only a hit is replaced; every other
  * byte is left alone, so an ordinary conversation is unchanged.
+ *
+ * WHICH HOST PACKAGE TO WATCH WHEN A ROW STOPS MATCHING (issue #164 traced the
+ * three paragraphs to their owners in the DSH install): the identity sentence
+ * comes from `@deepseek-ai/dsh-system-prompt`, the @-path paragraph from
+ * `@deepseek-ai/dsh-file-reference`, and the Web GUI paragraph from
+ * `@deepseek-ai/dsh-harness-dev-context`. #164 also bisected the MINIMUM
+ * triggering span: the @-path paragraph already fails at its first two sentences
+ * (112 chars) and the Web GUI paragraph at its first two (217 chars), each
+ * sentence alone answering 200 — so a row must clear the truncated shape too,
+ * which is exactly what sentence-level rows do. Pinned by
+ * `tests/issue163-sentence-rewrite.spec.ts`.
  */
 const CHANNEL_GATE_PHRASES: readonly (readonly [string, string])[] = [
   [

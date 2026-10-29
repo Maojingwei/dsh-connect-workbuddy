@@ -115,6 +115,33 @@ describe('the rewrite is wired into prepareChatBody in the required order', () =
     expect(content[1]?.text).not.toContain('Tokens prefixed with @')
   })
 
+  // #164 bisected the live gateway further and reported the MINIMAL span that
+  // triggers each paragraph: the @-path paragraph fails at its first 111 chars
+  // (two sentences), the Web GUI paragraph at its first 221 (also two). Both
+  // spans must be cleared by the table, or a host that ships only a truncated
+  // version of the paragraph would still be refused.
+  it('clears the minimal triggering spans measured in #164', () => {
+    const atParagraphHead = 'Tokens prefixed with @ are paths the user explicitly referenced. '
+      + 'Relative paths resolve from the workspace root;'
+    const guiHead = 'You are interacting with the user through the DeepSeek Harness Web GUI whose URL the runtime '
+      + 'context names. When the user refers to "this page", this GUI, or this app without naming '
+      + 'another target, they mean this GUI.'
+    expect(atParagraphHead.length).toBe(112)
+    expect(guiHead.length).toBe(217)
+
+    const atRewritten = rewriteChannelFingerprintPhrases(atParagraphHead)
+    const guiRewritten = rewriteChannelFingerprintPhrases(guiHead)
+    expect(atRewritten).not.toContain('Tokens prefixed with @')
+    expect(atRewritten).not.toContain('Relative paths resolve from')
+    expect(guiRewritten).not.toContain('You are interacting with the user through')
+    // Still readable instructions: the rewrite changes wording, not meaning.
+    expect(atRewritten).toContain('Paths that begin with @')
+    expect(atRewritten).toContain('Relative paths are resolved against')
+    expect(guiRewritten).toContain('working with the user inside')
+    // The second GUI sentence is not a fingerprint of its own and is left alone.
+    expect(guiRewritten).toContain('they mean this GUI.')
+  })
+
   it('is a no-op on a body with no measured phrase', () => {
     const body = prepareChatBody(JSON.stringify({
       model: 'deepseek-v4.1-flash',

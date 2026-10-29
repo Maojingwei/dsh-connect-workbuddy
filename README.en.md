@@ -184,6 +184,10 @@ One class of state in the pool **does not go through a draft**: probe results, c
 
 > ⚠️ **Version requirement: DSH 0.1.7-rc.1 or newer (current window: `0.1.7-rc.1` – `0.2.x` GA).** Since v2.1.0 this plugin only supports hosts on DSH 0.1.7-rc.1 and above (older hosts cannot resolve the dependencies to install this version); hosts on 0.1.5 and earlier should stay on v2.0.15. Since v2.1.2 the upper bound is **`<0.3.0-0`**; the 0.3.0 line is explicitly refused. See [Supported host range](#supported-host-range) below.
 
+> ⚠️ **For the CN 「channel verification」 400 (`code 11128`), make sure the plugin is ≥ 5.13.1.** Only from 5.13.1 does the plugin rewrite the known fixed fingerprints **before the request is sent**; 5.12.x and earlier only had the neutral-head + zero-width ladder, which measured **400 on every rung** for the same body (matrix in [#164](https://github.com/dingminhua/dsh-connect-workbuddy/issues/164)). Anyone left on an older build keeps hitting a 400 that is already fixed, and it looks like "fails every single time, restarting does nothing".
+>
+> Two things stop people from actually upgrading: **① different marketplace indexes can report three different "latest" at the same moment** (5.12.3 / 5.12.4 / 5.13.1 were all live at once per #164), so "check for updates" on a stale index never shows the new version; **② pnpm's 24-hour release-age window** (`minimumReleaseAge`) **silently resolves a floating range back to the previous version**. When you need this fixed right now, pin the **exact version**: `dsh-connect-workbuddy@5.13.1`.
+
 ### Supported host range
 
 DSH's shipped gate (`evaluatePluginCompatibility` in `packages/boot/app-boot/src/plugin-compatibility.ts`) checks every declared `dsh-*` peer range; **one unsatisfied peer skips the entire bundle** (it lands in `skippedBundles` and is only printed to stderr) — no provider is registered, no card appears, the model list goes empty, and the page shows no error at all.

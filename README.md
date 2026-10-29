@@ -194,6 +194,10 @@ DSH PiAiAdapter（每个 provider 一套）
 
 > ⚠️ **版本要求：DSH 0.1.7-rc.1 及以上（当前窗口：`0.1.7-rc.1` ~ `0.2.x` 正式版）。** 自 v2.1.0 起本插件只支持 DSH 0.1.7-rc.1 及以上的宿主（旧版宿主无法通过依赖解析安装本版）；0.1.5 及更早的宿主请停留在 v2.0.15。自 v2.1.2 起上界放宽为 **`<0.3.0-0`**，0.3.0 线被明确拒绝。详见下方[受支持的宿主范围](#受支持的宿主范围)。
 
+> ⚠️ **国内区的「渠道校验」400（`code 11128`）请确保插件 ≥ 5.13.1。** 只有 5.13.1 起才会在**发出请求之前**按句改写已知的固定指纹；5.12.x 及更早只有「中性头 + 零宽扰动」三级救援，在同一份 body 上实测**全部 400**（对照矩阵见 [#164](https://github.com/dingminhua/dsh-connect-workbuddy/issues/164)）。停在旧版的人会反复撞上这个已经修好的 400，而表现是「每次必现、重启也没用」。
+>
+> 两个会让人升级不到的原因：**① 插件市场的不同索引在同一时刻可能给出三个「最新」**（[#164](https://github.com/dingminhua/dsh-connect-workbuddy/issues/164) 实测到 5.12.3 / 5.12.4 / 5.13.1 并存），在旧索引上点「检查更新」看不到新版；**② pnpm 的 24 小时新版本等待期**（`minimumReleaseAge`）会把浮动范围**静默压回上一个版本**。需要立刻修复时请写**精确版本号**：`dsh plugin --profile desktop add dsh-connect-workbuddy@5.13.1`（原因见下方「刚发布的版本请写精确版本号」那条）。
+
 ### 受支持的宿主范围
 
 DSH 的随包门禁（`packages/boot/app-boot/src/plugin-compatibility.ts` 的 `evaluatePluginCompatibility`）会逐条核对本插件声明的 `dsh-*` peer 范围；**只要有一条不满足，整个组合包会被跳过**（进入 `skippedBundles`，仅打印到 stderr）——provider 不注册、卡片不出现、模型列表清空，而页面上没有任何报错。
